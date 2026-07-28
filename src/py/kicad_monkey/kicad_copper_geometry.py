@@ -328,6 +328,32 @@ def _resolve_net_ref(
     return net_ref.resolve_name(name_by_ordinal).resolve_ordinal(ordinal_by_name)
 
 
+def _parse_slim_at(child: SexpFormSpan) -> tuple[float, float, float] | None:
+    match = _AT_PATTERN.match(child.text())
+    if match is None:
+        return None
+    angle = float(match.group(3)) if match.group(3) is not None else 0.0
+    return float(match.group(1)), float(match.group(2)), angle
+
+
+def _parse_slim_pad(
+    child: SexpFormSpan,
+    *,
+    name_by_ordinal: dict[int, str],
+    ordinal_by_name: dict[str, int],
+) -> Pad | None:
+    parsed = child.parse()
+    if not isinstance(parsed, list) or not parsed:
+        return None
+    pad = Pad.from_sexp(parsed)
+    pad.net = _resolve_net_ref(
+        pad.net,
+        name_by_ordinal=name_by_ordinal,
+        ordinal_by_name=ordinal_by_name,
+    )
+    return pad
+
+
 def _parse_slim_footprint(
     _parent: SexpFormSpan,
     children: Sequence[SexpFormSpan],
@@ -343,12 +369,9 @@ def _parse_slim_footprint(
     pads: list[Pad] = []
     for child in children:
         if child.head == "at":
-            match = _AT_PATTERN.match(child.text())
-            if match is not None:
-                at_x = float(match.group(1))
-                at_y = float(match.group(2))
-                if match.group(3) is not None:
-                    at_angle = float(match.group(3))
+            placement = _parse_slim_at(child)
+            if placement is not None:
+                at_x, at_y, at_angle = placement
         elif child.head == "uuid":
             match = _UUID_PATTERN.match(child.text())
             if match is not None:
@@ -360,16 +383,13 @@ def _parse_slim_footprint(
                     Property(name=match.group(1), value=match.group(2))
                 )
         elif child.head == "pad":
-            parsed = child.parse()
-            if not isinstance(parsed, list) or not parsed:
-                continue
-            pad = Pad.from_sexp(parsed)
-            pad.net = _resolve_net_ref(
-                pad.net,
+            pad = _parse_slim_pad(
+                child,
                 name_by_ordinal=name_by_ordinal,
                 ordinal_by_name=ordinal_by_name,
             )
-            pads.append(pad)
+            if pad is not None:
+                pads.append(pad)
     return Footprint(
         library_link="",
         at_x=at_x,
@@ -672,21 +692,29 @@ def _pad_local_rings(pad: Pad, error: float) -> list[list[tuple[float, float]]]:
     if shape == PadShape.RECT:
         return [pad._to_rect_polygon(cx, cy)]
     if shape == PadShape.CUSTOM:
-        output: list[list[tuple[float, float]]] = []
-        angle = -float(pad.at_angle)
-        for primitive in pad.custom_primitives:
-            if primitive.primitive_type != "gr_poly":
-                continue
-            points = primitive.points
-            if not points:
-                continue
-            ring: list[tuple[float, float]] = []
-            for x, y in points:
-                rx, ry = rotate_point(float(x), float(y), angle)
-                ring.append((rx + cx, ry + cy))
-            output.append(ring)
-        return output
+        return _pad_custom_local_rings(pad, cx, cy)
     return []
+
+
+def _pad_custom_local_rings(
+    pad: Pad,
+    cx: float,
+    cy: float,
+) -> list[list[tuple[float, float]]]:
+    output: list[list[tuple[float, float]]] = []
+    angle = -float(pad.at_angle)
+    for primitive in pad.custom_primitives:
+        if primitive.primitive_type != "gr_poly":
+            continue
+        points = primitive.points
+        if not points:
+            continue
+        ring: list[tuple[float, float]] = []
+        for x, y in points:
+            rx, ry = rotate_point(float(x), float(y), angle)
+            ring.append((rx + cx, ry + cy))
+        output.append(ring)
+    return output
 
 
 def _pad_drill_local_ring(
