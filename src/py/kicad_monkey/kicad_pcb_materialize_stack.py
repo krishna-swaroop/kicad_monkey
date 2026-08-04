@@ -2,7 +2,7 @@
 
 This module is deliberately not part of the promoted package API.
 
-One ordered stack describes the whole board. Each material slice carries a
+One ordered stack describes the whole board. Every layer in it carries a
 canonical key, a physical role, an order, an optional thickness, and optional
 dielectric properties. Z positions are derived by walking the thicknesses.
 
@@ -25,11 +25,24 @@ _DIELECTRIC_INDEX_PATTERN = re.compile(r"(\d+)\s*$")
 
 
 class MaterialRole(str, Enum):
-    """The physical role a material slice plays in the board."""
+    """The physical role one layer of the stack plays in the board."""
 
     CONDUCTOR = "conductor"
     DIELECTRIC = "dielectric"
     MASK = "mask"
+    PASTE = "paste"
+    SILKSCREEN = "silkscreen"
+
+
+class MaterialKind(str, Enum):
+    """The substance an operation deposits or removes.
+
+    Distinct from :class:`MaterialRole`: a stack layer plays the role of
+    conductor, and the material laid onto it is copper.
+    """
+
+    COPPER = "copper"
+    SOLDER_MASK = "solder_mask"
     PASTE = "paste"
     SILKSCREEN = "silkscreen"
 
@@ -59,7 +72,7 @@ def _role_for_type(type_name: str) -> MaterialRole | None:
 
 
 def copper_slice_key(layer_name: str) -> str:
-    """Canonical slice key for a KiCad copper layer name."""
+    """Canonical key for a KiCad copper layer name."""
     name = str(layer_name or "")
     if name == "F.Cu":
         return "copper.front"
@@ -182,7 +195,7 @@ class PcbMaterialStack:
     def z_span_nm(self, key: str) -> tuple[int, int] | None:
         """Top and bottom Z of a slice, walking the stack from the front.
 
-        Returns ``None`` when a *bulk* slice above the requested one has
+        Returns ``None`` when a *bulk* layer above the requested one has
         unknown thickness, because every position below it would then be a
         guess. Surface roles (mask, paste, silkscreen) with unknown thickness
         contribute zero instead: KiCad writes ``0`` for them because it does
@@ -262,7 +275,7 @@ def build_material_stack(
 def copper_layer_slice_keys(
     copper_layer_names: Iterable[str],
 ) -> dict[str, str]:
-    """Map KiCad copper layer names to canonical conductor slice keys."""
+    """Map KiCad copper layer names to canonical conductor keys."""
     return {
         str(name): copper_slice_key(str(name))
         for name in copper_layer_names

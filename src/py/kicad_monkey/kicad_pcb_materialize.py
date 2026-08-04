@@ -5,8 +5,8 @@ This module is deliberately not part of the promoted package API.
 Once geometry crosses this boundary it no longer matters whether a piece of
 copper was authored as a ``track``, ``pad``, ``via``, ``zone``, or
 ``filled_polygon``. Those names describe how a board was drawn. A geometry
-consumer needs to know what physical material exists, which slice it belongs
-to, what it is electrically connected to, and how it is placed.
+consumer needs to know what physical material exists, where in the stack it
+sits, what it is electrically connected to, and how it is placed.
 
 So the result is a stream of material operations, each carrying an analytic
 shape plus one fully composed local-to-board affine. Nothing is polygonized
@@ -45,7 +45,7 @@ from .kicad_pcb_materialize_geometry import (
     Trapezoid2D,
 )
 from .kicad_pcb_materialize_stack import (
-    MaterialRole,
+    MaterialKind,
     MaterialSlice,
     PcbMaterialStack,
     build_material_stack,
@@ -157,7 +157,7 @@ class SurfaceOperation2D:
     """Material added to or removed from one physical slice."""
 
     action: SurfaceAction
-    material: MaterialRole
+    material: MaterialKind
     slice_key: str
     geometry: Shape2D
     affine: Affine2D
@@ -244,7 +244,7 @@ class _Context:
     net_names: dict[str, str] = field(default_factory=dict)
 
     def slice_keys_for(self, layer_names: Sequence[str]) -> tuple[str, ...]:
-        """Requested conductor slice keys for a set of KiCad layer names."""
+        """Requested conductor keys for a set of KiCad layer names."""
         return tuple(
             key
             for key in (copper_slice_key(name) for name in layer_names)
@@ -269,7 +269,7 @@ class _Context:
         self.surfaces.append(
             SurfaceOperation2D(
                 action=SurfaceAction.ADD,
-                material=MaterialRole.CONDUCTOR,
+                material=MaterialKind.COPPER,
                 slice_key=slice_key,
                 geometry=geometry,
                 affine=affine,
