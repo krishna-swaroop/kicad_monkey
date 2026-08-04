@@ -237,7 +237,6 @@ class _Context:
     """Mutable emission state for one materialization run."""
 
     request: MaterializationRequest
-    stack: PcbMaterialStack
     copper_layer_names: tuple[str, ...]
     surfaces: list[SurfaceOperation2D] = field(default_factory=list)
     holes: list[HoleOperation2D] = field(default_factory=list)
@@ -700,7 +699,6 @@ def materialize_pcb(
     stack = build_material_stack(board.stackup(), copper_layer_names)
     context = _Context(
         request=request,
-        stack=stack,
         copper_layer_names=copper_layer_names,
     )
     if request.wants(MaterialProduct.COPPER):
