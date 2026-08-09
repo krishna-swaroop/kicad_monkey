@@ -52,11 +52,18 @@ Current complexity baseline:
 
 ```text
 max C901 complexity: 27
-functions over 10: 129
-functions over 20: 18
+functions over 10: 132
+functions over 20: 17
 functions over 30: 0
 functions over 50: 0
 ```
+
+This fork sits three functions above the released package at threshold 10,
+from copper geometry extraction and the s-expression lexer rewrite. The
+threshold-20 bucket is one better than the released package and is ratcheted
+down accordingly. The four functions concerned are named in
+`tests/L99_signoff/test_L99_002_quality_tools.py`; they should be decomposed
+rather than left behind a raised bar before that work is offered upstream.
 
 Known remaining package-wide ruff work is in older non-L99 tests and any future
 developer-only scripts. Package pyright is at zero diagnostics under
