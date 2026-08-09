@@ -2,6 +2,35 @@
 
 ## Unreleased
 
+## 2026.8.9
+
+- Extend the bundled CC0 KiCad Newstroke table through U+2BFF, adding Greek,
+  mathematical, arrow, and technical-symbol coverage without changing the
+  original ASCII glyph strings.
+- Add a deterministic KiCad Stroke webfont package with Light, Regular, Bold,
+  and italic faces in TTF, OTF, WOFF, and WOFF2 formats, plus CSS, a blue
+  phosphor engineering demo, provenance metadata, and package synchronization
+  checks.
+- Embed a deterministic, occurrence-scoped, variant-neutral compiled schematic
+  graph in `KiCadDesign.to_json()`, including reusable definitions, realized
+  hierarchy, component and terminal occurrences, local nets, scalar hierarchy
+  bindings, and scoped drawing links.
+- Render KiCad schematic directive markers, rule areas, and DNP hierarchical
+  sheets through Plotter IR with source identity and KiCad-compatible styling.
+- Fold DNP, BOM, board, and simulation policy through the complete sheet
+  occurrence path while preserving the unfiltered topology in the compiled
+  graph.
+- Match KiCad CLI root-sheet metadata and multi-unit `tstamps` ordering for the
+  affected netlist oracle cases.
+
+## 2026.8.1
+
+- Fix zone fill emission: unfilled copper zones now emit a bare `(fill ...)`
+  element instead of `(fill no ...)`. KiCad's parser accepts only a bare `yes`
+  token inside `fill`, so boards written with the old form failed to load in
+  KiCad ("Failed to load board"). Parsing is unchanged; legacy files carrying
+  `(fill no ...)` are repaired on re-emit.
+
 ## 2026.7.28
 
 - Harden project-local library extraction so project scans ignore KiCad

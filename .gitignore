@@ -18,3 +18,4 @@ tests/corpus/*.tmp.zip
 docs/plans/
 docs/research/
 .DS_Store
+temp/
