@@ -1105,7 +1105,7 @@
             "unevaluatedProperties": {
                 "not": {}
             },
-            "description": "Open centreline of line and arc segments swept by a constant width."
+            "description": "Open centreline of line, arc, and cubic segments swept by a constant width."
         },
         "PlanarRegion2d": {
             "type": "object",
@@ -1190,6 +1190,9 @@
                 },
                 {
                     "$ref": "#/$defs/ArcSegment"
+                },
+                {
+                    "$ref": "#/$defs/CubicSegment"
                 }
             ]
         },
@@ -1228,7 +1231,7 @@
             "unevaluatedProperties": {
                 "not": {}
             },
-            "description": "Closed contour of line and arc segments. The last segment returns to `start_nm`."
+            "description": "Closed contour of line, arc, and cubic segments. The last segment returns to `start_nm`."
         },
         "LineSegment": {
             "type": "object",
@@ -1273,6 +1276,34 @@
                 "not": {}
             },
             "description": "Circular arc segment through `mid_nm` to `end_nm`, the form KiCad stores."
+        },
+        "CubicSegment": {
+            "type": "object",
+            "properties": {
+                "kind": {
+                    "type": "string",
+                    "const": "cubic"
+                },
+                "control1_nm": {
+                    "$ref": "#/$defs/NmPoint"
+                },
+                "control2_nm": {
+                    "$ref": "#/$defs/NmPoint"
+                },
+                "end_nm": {
+                    "$ref": "#/$defs/NmPoint"
+                }
+            },
+            "required": [
+                "kind",
+                "control1_nm",
+                "control2_nm",
+                "end_nm"
+            ],
+            "unevaluatedProperties": {
+                "not": {}
+            },
+            "description": "Cubic Bézier segment from the previous point through two control points\nto `end_nm`, the form KiCad stores for curves."
         }
     }
 }

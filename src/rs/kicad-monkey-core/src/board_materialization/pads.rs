@@ -13,9 +13,9 @@ use crate::pcb::{
     PcbResolvedPadCopperLayer,
 };
 use kicad_monkey_contracts::generated::materialization_document::{
-    Affine2D, Annulus2d, ArcSegment, Capsule2d, ChamferedRect2d, Contour, Disk2d, LineSegment, Nm,
-    NmPoint, NonNegativeNm, PathCap, PathJoin, PathSegment, PlanarRegion2d, Rect2d, RectCorner,
-    RoundedRect2d, Shape2d, SweptPath2d, Trapezoid2d,
+    Affine2D, Annulus2d, ArcSegment, Capsule2d, ChamferedRect2d, Contour, CubicSegment, Disk2d,
+    LineSegment, Nm, NmPoint, NonNegativeNm, PathCap, PathJoin, PathSegment, PlanarRegion2d,
+    Rect2d, RectCorner, RoundedRect2d, Shape2d, SweptPath2d, Trapezoid2d,
 };
 
 fn len(value_mm: f64) -> NonNegativeNm {
@@ -349,26 +349,17 @@ fn arc_contour(points: &[PcbPolygonPoint]) -> Option<Contour> {
     })
 }
 
-/// Cubic Bézier strokes have no analytic shape in a0; they are lowered to
-/// 24 line segments of one swept path.
+/// A cubic Bézier stroke as one swept path with a single cubic segment.
 fn bezier(points: [PcbPoint; 4], width: f64) -> Shape2d {
-    let sample = |t: f64| {
-        let mt = 1.0 - t;
-        let blend = |a: f64, b: f64, c: f64, d: f64| {
-            mt.powi(3) * a + 3.0 * mt.powi(2) * t * b + 3.0 * mt * t.powi(2) * c + t.powi(3) * d
-        };
-        PcbPoint {
-            x: blend(points[0].x, points[1].x, points[2].x, points[3].x),
-            y: blend(points[0].y, points[1].y, points[2].y, points[3].y),
-        }
-    };
-    let segments = (1..=24)
-        .map(|step| line_to(sample(f64::from(step) / 24.0)))
-        .collect();
     Shape2d::SweptPath2d(SweptPath2d {
         kind: "swept_path_2d".to_owned(),
         start_nm: pcb_point(points[0]),
-        segments,
+        segments: vec![PathSegment::CubicSegment(CubicSegment {
+            kind: "cubic".to_owned(),
+            control1_nm: pcb_point(points[1]),
+            control2_nm: pcb_point(points[2]),
+            end_nm: pcb_point(points[3]),
+        })],
         width_nm: len(width),
         cap: PathCap::Round,
         join: PathJoin::Round,

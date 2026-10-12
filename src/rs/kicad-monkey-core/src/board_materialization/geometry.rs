@@ -150,7 +150,64 @@ fn merge(a: [i64; 4], b: [i64; 4]) -> [i64; 4] {
     ]
 }
 
-/// Bounds of a line/arc path; arcs contribute their full circle's box when
+/// Exact bounds of a cubic Bézier: its end points plus the curve at every
+/// interior parameter where one coordinate's derivative vanishes.
+fn cubic_bounds(points: [&NmPoint; 4]) -> [i64; 4] {
+    let [p0, p1, p2, p3] = points.map(xy);
+    let mut bounds = span(&[points[0], points[3]]);
+    for t in cubic_extrema(p0.0, p1.0, p2.0, p3.0)
+        .into_iter()
+        .chain(cubic_extrema(p0.1, p1.1, p2.1, p3.1))
+    {
+        let x = cubic_at(p0.0, p1.0, p2.0, p3.0, t);
+        let y = cubic_at(p0.1, p1.1, p2.1, p3.1, t);
+        bounds = merge(
+            bounds,
+            [
+                x.floor() as i64,
+                y.floor() as i64,
+                x.ceil() as i64,
+                y.ceil() as i64,
+            ],
+        );
+    }
+    bounds
+}
+
+fn cubic_at(a: i64, b: i64, c: i64, d: i64, t: f64) -> f64 {
+    let mt = 1.0 - t;
+    mt * mt * mt * a as f64
+        + 3.0 * mt * mt * t * b as f64
+        + 3.0 * mt * t * t * c as f64
+        + t * t * t * d as f64
+}
+
+/// Parameters in (0, 1) where a cubic coordinate is stationary: the roots of
+/// its derivative, the quadratic `qa*t^2 + qb*t + qc`.
+fn cubic_extrema(a: i64, b: i64, c: i64, d: i64) -> Vec<f64> {
+    let (a, b, c, d) = (a as f64, b as f64, c as f64, d as f64);
+    let qa = -a + 3.0 * b - 3.0 * c + d;
+    let qb = 2.0 * (a - 2.0 * b + c);
+    let qc = b - a;
+    let roots = if qa.abs() < 1e-12 {
+        if qb.abs() < 1e-12 {
+            Vec::new()
+        } else {
+            vec![-qc / qb]
+        }
+    } else {
+        let discriminant = qb * qb - 4.0 * qa * qc;
+        if discriminant < 0.0 {
+            Vec::new()
+        } else {
+            let root = discriminant.sqrt();
+            vec![(-qb + root) / (2.0 * qa), (-qb - root) / (2.0 * qa)]
+        }
+    };
+    roots.into_iter().filter(|t| *t > 0.0 && *t < 1.0).collect()
+}
+
+/// Bounds of a line/arc/cubic path; arcs contribute their full circle's box when
 /// the three points are not collinear, which is conservative and cheap.
 fn path_bounds(start: &NmPoint, segments: &[PathSegment]) -> [i64; 4] {
     let mut bounds = span(&[start]);
@@ -164,6 +221,16 @@ fn path_bounds(start: &NmPoint, segments: &[PathSegment]) -> [i64; 4] {
             PathSegment::ArcSegment(arc) => {
                 bounds = merge(bounds, arc_bounds(&previous, &arc.mid_nm, &arc.end_nm));
                 previous = arc.end_nm.clone();
+            }
+            PathSegment::CubicSegment(cubic) => {
+                let points = [
+                    &previous,
+                    &cubic.control1_nm,
+                    &cubic.control2_nm,
+                    &cubic.end_nm,
+                ];
+                bounds = merge(bounds, cubic_bounds(points));
+                previous = cubic.end_nm.clone();
             }
         }
     }

@@ -61,6 +61,7 @@ kind_deserializers! {
     deserialize_planar_region_2d_kind => "planar_region_2d",
     deserialize_line_segment_kind => "line",
     deserialize_arc_segment_kind => "arc",
+    deserialize_cubic_segment_kind => "cubic",
     deserialize_surface_operation_kind => "surface",
     deserialize_hole_operation_kind => "hole",
 }

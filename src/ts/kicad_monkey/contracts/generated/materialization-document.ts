@@ -41,7 +41,7 @@ export type Shape2D =
  */
 export type NmPoint = [Nm, Nm];
 export type RectCorner = "top_left" | "top_right" | "bottom_left" | "bottom_right";
-export type PathSegment = LineSegment | ArcSegment;
+export type PathSegment = LineSegment | ArcSegment | CubicSegment;
 export type PathCap = "round" | "flat";
 export type PathJoin = "round" | "miter";
 export type HolePlating = "plated" | "unplated";
@@ -275,7 +275,7 @@ export interface Annulus2D {
   inner_radius_nm: NonNegativeNm;
 }
 /**
- * Open centreline of line and arc segments swept by a constant width.
+ * Open centreline of line, arc, and cubic segments swept by a constant width.
  */
 export interface SweptPath2D {
   kind: "swept_path_2d";
@@ -304,6 +304,16 @@ export interface ArcSegment {
   end_nm: NmPoint;
 }
 /**
+ * Cubic Bézier segment from the previous point through two control points
+ * to `end_nm`, the form KiCad stores for curves.
+ */
+export interface CubicSegment {
+  kind: "cubic";
+  control1_nm: NmPoint;
+  control2_nm: NmPoint;
+  end_nm: NmPoint;
+}
+/**
  * One analytic outer contour with optional hole contours.
  */
 export interface PlanarRegion2D {
@@ -312,7 +322,7 @@ export interface PlanarRegion2D {
   holes: Contour[];
 }
 /**
- * Closed contour of line and arc segments. The last segment returns to `start_nm`.
+ * Closed contour of line, arc, and cubic segments. The last segment returns to `start_nm`.
  */
 export interface Contour {
   start_nm: NmPoint;

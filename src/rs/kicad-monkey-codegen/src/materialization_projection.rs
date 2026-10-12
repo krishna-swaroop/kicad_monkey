@@ -52,7 +52,7 @@ const MATERIALIZATION_SHAPE_KINDS: [(&str, &str, &str); 9] = [
     ),
 ];
 
-const MATERIALIZATION_SEGMENT_KINDS: [(&str, &str, &str); 2] = [
+const MATERIALIZATION_SEGMENT_KINDS: [(&str, &str, &str); 3] = [
     (
         "LineSegment",
         "line",
@@ -62,6 +62,11 @@ const MATERIALIZATION_SEGMENT_KINDS: [(&str, &str, &str); 2] = [
         "ArcSegment",
         "arc",
         "materialization_contract::deserialize_arc_segment_kind",
+    ),
+    (
+        "CubicSegment",
+        "cubic",
+        "materialization_contract::deserialize_cubic_segment_kind",
     ),
 ];
 

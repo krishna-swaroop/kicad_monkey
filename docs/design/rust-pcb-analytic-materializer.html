@@ -82,9 +82,14 @@
       exactly: <code>disk_2d</code>, <code>rect_2d</code>,
       <code>rounded_rect_2d</code>, <code>chamfered_rect_2d</code>,
       <code>trapezoid_2d</code>, <code>capsule_2d</code>,
-      <code>annulus_2d</code>, <code>swept_path_2d</code> (line and arc
-      segments with width, cap, and join), and
-      <code>planar_region_2d</code>. Every operation also carries one
+      <code>annulus_2d</code>, <code>swept_path_2d</code> (line, arc, and
+      cubic Bézier segments with width, cap, and join), and
+      <code>planar_region_2d</code>, whose contours use the same segments.
+      The <code>cubic</code> segment is an addition to the issue #20 sketch.
+      It is the exact form of KiCad's curves on pads, graphics, and the
+      board edge, and it will be proposed upstream. Consumers that cannot
+      evaluate cubics directly, for example an SDF stroke shader, lower them
+      at their own tolerance. Every operation also carries one
       composed <code>Affine2D</code>, one material role, one slice, and a
       resolved <code>net_key</code>. Holes are separate operations.</li>
     <li><strong>Analytic only.</strong> The crate performs no Boolean
@@ -340,8 +345,8 @@
       board coordinates.</li>
     <li><strong>Custom pads.</strong> A custom pad emits its anchor shape
       as well as each primitive. Polygon primitives keep authored arcs as
-      arc segments. Cubic Bézier strokes have no a0 shape, so they are
-      lowered to 24 line segments of one swept path.</li>
+      arc segments, and Bézier strokes become one swept path with a single
+      <code>cubic</code> segment.</li>
     <li><strong>Conditional flashing.</strong> Pads and vias that remove
       unused layers, keep end layers, or carry zone-layer connections take
       their flashed layers from core's board plot facts. Presentation forms
@@ -352,7 +357,8 @@
       its products, so rule 2 holds for diagnostics as well as for
       operations.</li>
     <li><strong>Exact bounds.</strong> Disks, annuli, and capsules placed by
-      a similarity affine get exact bounds. Other shapes use the transformed
+      a similarity affine get exact bounds. Cubic segments get exact bounds
+      from their per-axis turning points, not their control-point hull. Other shapes use the transformed
       local box, which is exact for rectangles and conservative for curved
       shapes.</li>
     <li><strong>Undecodable zones.</strong> A copper zone that fails to

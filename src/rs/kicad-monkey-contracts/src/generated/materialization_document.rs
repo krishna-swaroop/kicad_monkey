@@ -688,13 +688,13 @@ pub struct Component {
     pub side: BoardSide,
     pub source_uid: ::std::string::String,
 }
-///Closed contour of line and arc segments. The last segment returns to `start_nm`.
+///Closed contour of line, arc, and cubic segments. The last segment returns to `start_nm`.
 ///
 /// <details><summary>JSON schema</summary>
 ///
 /// ```json
 ///{
-///  "description": "Closed contour of line and arc segments. The last segment returns to `start_nm`.",
+///  "description": "Closed contour of line, arc, and cubic segments. The last segment returns to `start_nm`.",
 ///  "type": "object",
 ///  "required": [
 ///    "segments",
@@ -721,6 +721,49 @@ pub struct Component {
 pub struct Contour {
     pub segments: ::std::vec::Vec<PathSegment>,
     pub start_nm: NmPoint,
+}
+/**Cubic Bézier segment from the previous point through two control points
+to `end_nm`, the form KiCad stores for curves.*/
+///
+/// <details><summary>JSON schema</summary>
+///
+/// ```json
+///{
+///  "description": "Cubic Bézier segment from the previous point through two control points\nto `end_nm`, the form KiCad stores for curves.",
+///  "type": "object",
+///  "required": [
+///    "control1_nm",
+///    "control2_nm",
+///    "end_nm",
+///    "kind"
+///  ],
+///  "properties": {
+///    "control1_nm": {
+///      "$ref": "#/$defs/NmPoint"
+///    },
+///    "control2_nm": {
+///      "$ref": "#/$defs/NmPoint"
+///    },
+///    "end_nm": {
+///      "$ref": "#/$defs/NmPoint"
+///    },
+///    "kind": {
+///      "type": "string",
+///      "const": "cubic"
+///    }
+///  },
+///  "additionalProperties": false
+///}
+/// ```
+/// </details>
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct CubicSegment {
+    pub control1_nm: NmPoint,
+    pub control2_nm: NmPoint,
+    pub end_nm: NmPoint,
+    #[serde(deserialize_with = "crate::materialization_contract::deserialize_cubic_segment_kind")]
+    pub kind: ::std::string::String,
 }
 ///`DiagnosticSeverity`
 ///
@@ -2123,6 +2166,9 @@ impl ::std::convert::TryFrom<::std::string::String> for PathJoin {
 ///    },
 ///    {
 ///      "$ref": "#/$defs/ArcSegment"
+///    },
+///    {
+///      "$ref": "#/$defs/CubicSegment"
 ///    }
 ///  ]
 ///}
@@ -2133,6 +2179,7 @@ impl ::std::convert::TryFrom<::std::string::String> for PathJoin {
 pub enum PathSegment {
     LineSegment(LineSegment),
     ArcSegment(ArcSegment),
+    CubicSegment(CubicSegment),
 }
 impl ::std::convert::From<LineSegment> for PathSegment {
     fn from(value: LineSegment) -> Self {
@@ -2142,6 +2189,11 @@ impl ::std::convert::From<LineSegment> for PathSegment {
 impl ::std::convert::From<ArcSegment> for PathSegment {
     fn from(value: ArcSegment) -> Self {
         Self::ArcSegment(value)
+    }
+}
+impl ::std::convert::From<CubicSegment> for PathSegment {
+    fn from(value: CubicSegment) -> Self {
+        Self::CubicSegment(value)
     }
 }
 ///One analytic outer contour with optional hole contours.
@@ -2955,13 +3007,13 @@ pub struct SurfaceOperation {
     pub shape: Shape2d,
     pub slice_key: ::std::string::String,
 }
-///Open centreline of line and arc segments swept by a constant width.
+///Open centreline of line, arc, and cubic segments swept by a constant width.
 ///
 /// <details><summary>JSON schema</summary>
 ///
 /// ```json
 ///{
-///  "description": "Open centreline of line and arc segments swept by a constant width.",
+///  "description": "Open centreline of line, arc, and cubic segments swept by a constant width.",
 ///  "type": "object",
 ///  "required": [
 ///    "cap",

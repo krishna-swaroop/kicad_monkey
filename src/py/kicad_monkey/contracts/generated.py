@@ -1832,7 +1832,7 @@ NmPoint = Annotated[list[Nm], Meta(min_length=2, max_length=2)]
 RectCorner = Literal["top_left", "top_right", "bottom_left", "bottom_right"]
 
 
-PathSegment = Union["LineSegment", "ArcSegment"]
+PathSegment = Union["LineSegment", "ArcSegment", "CubicSegment"]
 
 
 PathCap = Literal["round", "flat"]
@@ -1852,6 +1852,12 @@ class LineSegment(Struct, forbid_unknown_fields=True, frozen=True, tag="line", t
 
 class ArcSegment(Struct, forbid_unknown_fields=True, frozen=True, tag="arc", tag_field="kind"):
     mid_nm: NmPoint
+    end_nm: NmPoint
+
+
+class CubicSegment(Struct, forbid_unknown_fields=True, frozen=True, tag="cubic", tag_field="kind"):
+    control1_nm: NmPoint
+    control2_nm: NmPoint
     end_nm: NmPoint
 
 
@@ -4252,6 +4258,7 @@ __all__ = (
     "Contour",
     "LineSegment",
     "ArcSegment",
+    "CubicSegment",
     "SExpressionBuildRequestA0",
     "SExpressionBuildResultA0",
     "SExpressionScanRequestA0",

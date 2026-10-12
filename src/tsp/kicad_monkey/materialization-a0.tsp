@@ -57,12 +57,24 @@ model ArcSegment {
   end_nm: NmPoint;
 }
 
+/**
+ * Cubic Bézier segment from the previous point through two control points
+ * to `end_nm`, the form KiCad stores for curves.
+ */
+model CubicSegment {
+  kind: "cubic";
+  control1_nm: NmPoint;
+  control2_nm: NmPoint;
+  end_nm: NmPoint;
+}
+
 union PathSegment {
   line: LineSegment,
   arc: ArcSegment,
+  cubic: CubicSegment,
 }
 
-/** Closed contour of line and arc segments. The last segment returns to `start_nm`. */
+/** Closed contour of line, arc, and cubic segments. The last segment returns to `start_nm`. */
 model Contour {
   start_nm: NmPoint;
   @minItems(1) segments: PathSegment[];
@@ -142,7 +154,7 @@ model Annulus2d {
   inner_radius_nm: NonNegativeNm;
 }
 
-/** Open centreline of line and arc segments swept by a constant width. */
+/** Open centreline of line, arc, and cubic segments swept by a constant width. */
 model SweptPath2d {
   kind: "swept_path_2d";
   start_nm: NmPoint;

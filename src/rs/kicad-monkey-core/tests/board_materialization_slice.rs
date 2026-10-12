@@ -463,3 +463,70 @@ fn producer_enforces_the_source_limit() {
         .expect_err("source exceeds the limit");
     assert_eq!(error.code, "source_too_large");
 }
+
+/// Custom pad whose only primitive is a cubic Bézier stroke with control
+/// points at y = +2 mm and -2 mm. The curve itself only reaches
+/// y = ±(1/√3) mm ≈ 0.577 mm at t = (3 ∓ √3) / 6.
+const BEZIER_PAD: &str = r#"(kicad_pcb
+  (version 20240108)
+  (generator pcbnew)
+  (layers (0 "F.Cu" signal) (31 "B.Cu" signal))
+  (net 0 "")
+  (footprint "Demo:Curve"
+    (layer "F.Cu")
+    (at 10 20)
+    (property "Reference" "J1")
+    (pad "1" smd custom (at 0 0) (size 0.1 0.1) (layers "F.Cu")
+      (options (clearance outline) (anchor circle))
+      (primitives (gr_curve (pts (xy 0 0) (xy 1 2) (xy 2 -2) (xy 3 0)) (width 0.2)))
+      (uuid pad-j1-1)))
+)
+"#;
+
+#[test]
+fn bezier_strokes_stay_one_exact_cubic_segment() {
+    let document =
+        materialize_board(BEZIER_PAD, &request(&["copper"], "1048576")).expect("materializes");
+    validate_materialization_document(&document).expect("valid");
+    let value = serde_json::to_value(&document).expect("serialize");
+    let stroke = value["operations"]
+        .as_array()
+        .and_then(|operations| {
+            operations
+                .iter()
+                .find(|operation| operation["shape"]["kind"] == "swept_path_2d")
+        })
+        .expect("the curve stroke");
+    let segments = stroke["shape"]["segments"].as_array().expect("segments");
+    assert_eq!(segments.len(), 1);
+    assert_eq!(segments[0]["kind"], "cubic");
+    assert_eq!(segments[0]["control1_nm"], json!([1_000_000, 2_000_000]));
+    // Half width 0.1 mm plus the 1 nm stroke guard, around the true extreme.
+    let extreme = 1_000_000.0 / 3f64.sqrt();
+    let expected_max_y = 20_000_000.0 + extreme + 100_001.0;
+    let max_y = stroke["bounds"]["max_y_nm"].as_f64().expect("max y");
+    let min_y = stroke["bounds"]["min_y_nm"].as_f64().expect("min y");
+    assert!((max_y - expected_max_y).abs() <= 2.0, "max_y {max_y}");
+    assert!(
+        (min_y - (40_000_000.0 - expected_max_y)).abs() <= 2.0,
+        "min_y {min_y}"
+    );
+}
+
+#[test]
+fn decoding_rejects_a_mislabelled_cubic_segment() {
+    let with_segment = |kind: &str| {
+        let mut value = serde_json::to_value(example_document()).expect("serialize");
+        let operations = value["operations"].as_array_mut().expect("operations");
+        let path = operations
+            .iter_mut()
+            .find(|operation| operation["shape"]["kind"] == "swept_path_2d")
+            .expect("a path");
+        path["shape"]["segments"] = json!([{
+            "kind": kind, "control1_nm": [1, 1], "control2_nm": [2, 2], "end_nm": [3, 3]
+        }]);
+        value.to_string()
+    };
+    assert!(decode_materialization_document_a0(with_segment("arc").as_bytes()).is_err());
+    assert!(decode_materialization_document_a0(with_segment("cubic").as_bytes()).is_ok());
+}
