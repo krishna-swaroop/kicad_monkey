@@ -20,7 +20,7 @@ use super::geometry::nm;
 use super::geometry::{
     footprint_affine, identity, origin as zero, place, placement_affine, rotation_translation,
 };
-use super::graphics::{Drawn, TextSpec, operation_shapes, text_shapes};
+use super::graphics::{Drawn, TextSpec, closed_stroke, operation_shapes, text_anchor, text_shapes};
 use super::nets::net_key;
 use super::pads::reference;
 use super::pads::{pad_shapes, place_pad};
@@ -208,11 +208,8 @@ fn footprint_box_text(
 
 /// A footprint-local text anchor in the board frame.
 fn board_anchor(operation: &BoardTextOperation, record: &BoardFootprintRecord) -> (i64, i64) {
-    place(
-        &placement_affine(&record.placement),
-        operation.x,
-        operation.y,
-    )
+    let [x, y] = text_anchor(operation);
+    place(&placement_affine(&record.placement), x, y)
 }
 
 /// Layers a plot-document walk keeps.
@@ -289,6 +286,8 @@ fn footprint_graphics(
 enum Part<'a> {
     Geometry(&'a PlotterOperation),
     Text(&'a BoardTextOperation),
+    /// A closed outline of this stroke width (a rotated text-box border).
+    Outline(&'a [[i64; 2]], i64),
 }
 
 /// Draw a record made of geometry and text parts on `layer`.
@@ -304,6 +303,9 @@ fn mixed(
             match part {
                 Part::Geometry(op) => operation_shapes(op, drawn),
                 Part::Text(op) => text_shapes(&TextSpec::from_board(op).format(version), drawn),
+                Part::Outline(points, width) => {
+                    drawn.shapes.extend(closed_stroke(points, width));
+                }
             }
         }
     });
@@ -317,10 +319,17 @@ fn mixed_parts<'a>(
 ) -> Option<(&'a str, &'a str, &'a str, Vec<Part<'a>>)> {
     match record {
         BoardPlotRecord::TextBox(value) if keep(&value.layer) => {
-            let parts = value.operations.iter().map(|op| match op {
-                BoardTextBoxOperation::Border(op) => Part::Geometry(op),
-                BoardTextBoxOperation::Text(op) => Part::Text(op),
-            });
+            // KiCad strokes a polygon box's own outline.
+            let parts = value
+                .operations
+                .iter()
+                .map(|op| match (op, &value.kicad_border) {
+                    (BoardTextBoxOperation::Border(PlotterOperation::Rect(rect)), Some(points)) => {
+                        Part::Outline(points, rect.width_nm)
+                    }
+                    (BoardTextBoxOperation::Border(op), _) => Part::Geometry(op),
+                    (BoardTextBoxOperation::Text(op), _) => Part::Text(op),
+                });
             Some((
                 value.layer.as_str(),
                 "text_box",
@@ -343,10 +352,15 @@ fn mixed_parts<'a>(
         }
         BoardPlotRecord::Table(value) => {
             let layer = value.layers.iter().find(|layer| keep(layer))?;
-            let parts = value.operations.iter().map(|op| match op {
-                BoardTableOperation::Segment(op) => Part::Geometry(op),
-                BoardTableOperation::Text(op) => Part::Text(op),
-            });
+            let parts = value
+                .operations
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| !value.kicad_hidden_segments.contains(index))
+                .map(|(_, op)| match op {
+                    BoardTableOperation::Segment(op) => Part::Geometry(op),
+                    BoardTableOperation::Text(op) => Part::Text(op),
+                });
             Some((
                 layer.as_str(),
                 "table",

@@ -622,7 +622,8 @@
         <li><code>solder_mask_min_width</code> web merging</li>
         <li>hatched fills, drawn as outlines</li>
         <li>dashed strokes, drawn solid</li>
-        <li>multi-line stroke text, laid out as one line</li>
+        <li>multi-line stroke text with a line spacing other than 1, which
+          the plot document does not carry (it is laid out at 1)</li>
         <li>outline fonts without a render cache</li>
         <li>footprint scale and mirror transforms from format
           20260616</li>
@@ -685,10 +686,8 @@
         <li>Footprint knockout text uses the source's
           <code>knockout</code> flag. Footprint text-box borders are drawn,
           and their text follows core's text-box layout.</li>
-        <li>Open: text inside text boxes is placed by core's plot document,
-          which differs from KiCad by up to a few millimetres (it is
-          correct without a border on board text boxes). This is tracked
-          for the core plotter, not the materializer.</li>
+        <li>Text inside text boxes was left open here; it is fixed under
+          "Text boxes and tables" below.</li>
       </ul></li>
     <li><strong>Review batch 3.</strong> Each item was checked against
       <code>kicad-cli</code> 10.0.6 Gerbers on a purpose-built board.
@@ -718,8 +717,9 @@
         <li>OBC copper parity: front 0.001 %, back 0.016 %. All of the
           back-copper difference is one table whose
           <code>row_heights</code> include a negative row. Core's table
-          layout draws a separator for that row and KiCad does not. Like
-          text-box text, this is open in the core plotter.</li>
+          layout draws a separator for that row and KiCad does not. Fixed
+          under "Text boxes and tables" below (back copper now
+          0.0003 %).</li>
       </ul></li>
     <li><strong>Review batch 4: validator and contract.</strong> The a0
       contract keeps its shape; only its documentation and the rules it
@@ -776,6 +776,50 @@
               <code>realize_newstroke_kicad_a0</code>;</li>
             <li>the chaining tolerance on both sides of 10 µm.</li>
           </ul></li>
+    <li><strong>Text boxes and tables.</strong> Core's plot document keeps
+      the Python plotter's placement, which Python parity pins, so each
+      record also carries KiCad's own placement, which is outside the plot
+      contract. The materializer uses that placement.
+      <ul>
+        <li>Text-box text (<code>KiCadTextBoxText</code>) is anchored as in
+          <code>PCB_TEXTBOX::GetDrawPos</code> (10.0.6): the corner or edge
+          midpoint of the box grown by half its stroke, plus the margins
+          rotated with the text.
+          <ul>
+            <li>It is wrapped to KiCad's column, the top edge of the grown
+              box less the margins that face the board-frame text
+              direction.</li>
+            <li>Text with <code>justify mirror</code> is drawn
+              mirrored.</li>
+            <li>A footprint box is computed in the footprint frame, so it
+              turns with the footprint.</li>
+            <li>A box stored as a polygon is stroked along that polygon,
+              not its bounding rectangle.</li>
+          </ul></li>
+        <li>Multi-line stroke text is laid out as KiCad's stroke font lays
+          it out (<code>FONT::getLinePositions</code>):
+          <ul>
+            <li>a pitch of 1.68 × 0.9583 text heights;</li>
+            <li>the block aligned vertically as a whole;</li>
+            <li>each line aligned horizontally by its own width.</li>
+          </ul></li>
+        <li>Table separators KiCad does not draw are listed per record
+          (<code>kicad_hidden_segments</code>) and skipped. KiCad strokes
+          only cells' normalized right and bottom edges, so the far edge of
+          a negative row height or column width gets no line.</li>
+        <li>Evidence: every text box on the reviewer's board and on a stress
+          board matches <code>kicad-cli</code> 10.0.6 silkscreen to
+          0.0001 mm² per item. The stress board covers:
+          <ul>
+            <li>centre and right/bottom alignment;</li>
+            <li>90° and 30° boxes;</li>
+            <li>a mirrored back-side box;</li>
+            <li>a box in a 90° footprint;</li>
+            <li>multi-line board text at 0° and 30°.</li>
+          </ul>
+          OBC back copper is now within 0.0003 %. The Python plotter
+          parity tests pass unchanged.</li>
+      </ul></li>
         <li>Deduplication:
           <ul>
             <li>One millimetre and nanometre conversion family

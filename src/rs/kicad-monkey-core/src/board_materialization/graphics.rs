@@ -68,7 +68,7 @@ pub(crate) fn swept(start: NmPoint, segments: Vec<PathSegment>, width: i64) -> S
 }
 
 /// Closed stroke through `points`, back to the first.
-fn closed_stroke(points: &[[i64; 2]], width: i64) -> Option<Shape2d> {
+pub(crate) fn closed_stroke(points: &[[i64; 2]], width: i64) -> Option<Shape2d> {
     let (first, rest) = points.split_first()?;
     if rest.is_empty() || width <= 0 {
         return None;
@@ -285,12 +285,23 @@ pub(crate) struct TextSpec<'a> {
     font_face: &'a str,
 }
 
+/// Where KiCad draws `operation`: text-box text carries KiCad's own anchor;
+/// other text uses the plot-document position.
+pub(crate) fn text_anchor(operation: &BoardTextOperation) -> [i64; 2] {
+    operation
+        .kicad
+        .as_ref()
+        .map_or([operation.x, operation.y], |kicad| kicad.anchor)
+}
+
 impl<'a> TextSpec<'a> {
     pub(crate) fn from_board(value: &'a BoardTextOperation) -> Self {
+        let [x, y] = text_anchor(value);
+        let kicad = value.kicad.as_ref();
         Self {
-            text: &value.text,
-            x: value.x,
-            y: value.y,
+            text: kicad.map_or(&value.text, |kicad| &kicad.text),
+            x,
+            y,
             size: (value.size_x_nm, value.size_y_nm),
             orient_deg: value.orient_deg,
             align: (
@@ -306,7 +317,11 @@ impl<'a> TextSpec<'a> {
                 },
             ),
             pen_width_nm: value.pen_width_nm,
-            style: (value.mirror, value.italic, value.bold),
+            style: (
+                kicad.map_or(value.mirror, |kicad| kicad.mirrored),
+                value.italic,
+                value.bold,
+            ),
             knockout: value.knockout,
             cache: value.render_cache.as_ref(),
             board_frame: false,
@@ -609,12 +624,6 @@ fn knockout_corners(spec: &TextSpec<'_>, glyphs: &Glyphs, pen_nm: i64) -> Option
 fn text_limitations(spec: &TextSpec<'_>, drawn: &mut Drawn) {
     if spec.cache.is_some() {
         return;
-    }
-    if spec.text.contains('\n') {
-        drawn.unsupported.push((
-            "multiline_text_single_line",
-            format!("multi-line text {:?} is laid out as one line", spec.text),
-        ));
     }
     if !spec.font_face.is_empty() {
         drawn.unsupported.push((

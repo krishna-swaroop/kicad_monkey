@@ -424,3 +424,39 @@ fn kicad_line_positions_follow_get_line_positions() {
         assert!((t.1 - b.1 - 1.17).abs() <= 1e-9);
     }
 }
+
+#[test]
+fn kicad_multiline_text_steps_by_the_stroke_font_pitch_and_aligns_each_line() {
+    let pitch = 1.68 * 0.9583;
+    let single = kicad(request("H"));
+    let lines = kicad(request("H\nHHH"));
+    let first = points(&single);
+    let all = points(&lines);
+    // Bottom-aligned: the block (1.17 heights plus one pitch) ends at the
+    // anchor, so the first line sits one pitch higher than a single line.
+    for (one, both) in first.iter().zip(&all) {
+        assert!((both.0 - one.0).abs() <= 1e-9);
+        assert!((one.1 - both.1 - pitch).abs() <= 1e-9);
+    }
+    // The second line is a pitch below the first.
+    let second_line_h = &all[first.len()..first.len() * 2];
+    for (top, bottom) in all.iter().zip(second_line_h) {
+        assert!((bottom.1 - top.1 - pitch).abs() <= 1e-9);
+    }
+    // Right alignment uses each line's own width.
+    let right = |text| {
+        points(&kicad(NewstrokeRequest {
+            horizontal_alignment: TextHorizontalAlignment::Right,
+            ..request(text)
+        }))
+    };
+    let alone = right("HHH");
+    let below = right("H\nHHH");
+    let tail = &below[below.len() - alone.len()..];
+    for (a, b) in alone.iter().zip(tail) {
+        assert!(
+            (a.0 - b.0).abs() <= 1e-9,
+            "the long line is aligned by its own width"
+        );
+    }
+}
