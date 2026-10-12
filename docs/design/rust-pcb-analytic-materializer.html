@@ -462,6 +462,20 @@
       </ul>
       An independent count of each board's <code>Edge.Cuts</code>
       carriers agrees.</li>
+    <li><strong>Cross-check with KiCad-Prism's board body.</strong> With the
+      Geometer SDK for macOS arm64 (2026.9.19, checksum verified),
+      <code>prism-kicad-native compile-board-body</code> runs on all five
+      corpus boards. Its profile ring count and drill count equal our
+      profile regions plus cutouts and our hole operations on every board.
+      The outline box matches to the nanometre on four boards. On
+      charge_indicator, whose outline is four large-radius arcs, ours is up
+      to 4.9 µm larger, within Prism's 5 µm mesh tolerance: Prism measures
+      the triangulated arcs, which lie inside the true arcs.</li>
+    <li><strong>Exact arc bounds.</strong> The cross-check found that arc
+      bounds used the whole circumcircle box, which was safe but up to
+      hundreds of millimetres loose on large-radius arcs. An arc's box is
+      now its end points plus only the circle's axis extremes that it
+      sweeps, rounded outward.</li>
     <li><strong>Stackups.</strong> Stackups resolve with 9 to 25 slices of
       known thickness.</li>
     <li><strong>Rule 2.</strong> Rule 2 held for every per-slice scope of

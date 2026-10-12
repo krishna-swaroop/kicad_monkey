@@ -241,16 +241,43 @@ fn contour_bounds(contour: &Contour) -> [i64; 4] {
     path_bounds(&contour.start_nm, &contour.segments)
 }
 
-/// Circumcircle box of a three-point arc, or the point span when collinear.
+/// Exact box of a three-point arc: its end points plus each axis extreme
+/// of the circle that the arc sweeps, or the point span when collinear.
+///
+/// A circle point lies on the arc exactly when it is on the same side of
+/// the start-end chord as `mid`. An extreme within one nanometre of the
+/// chord line is an end point, already included. Extremes are rounded
+/// outward.
 pub(crate) fn arc_bounds(start: &NmPoint, mid: &NmPoint, end: &NmPoint) -> [i64; 4] {
-    match circumcircle(start, mid, end) {
-        Some((cx, cy, radius)) => {
-            let r = radius.ceil() as i64;
-            let (cx, cy) = (cx.round() as i64, cy.round() as i64);
-            merge([cx - r, cy - r, cx + r, cy + r], span(&[start, end]))
+    let Some((cx, cy, radius)) = circumcircle(start, mid, end) else {
+        return span(&[start, mid, end]);
+    };
+    let ((sx, sy), (mx, my), (ex, ey)) = (xy(start), xy(mid), xy(end));
+    let (sx, sy, ex, ey) = (sx as f64, sy as f64, ex as f64, ey as f64);
+    let side = |px: f64, py: f64| (ex - sx) * (py - sy) - (ey - sy) * (px - sx);
+    let mid_side = side(mx as f64, my as f64).signum();
+    let on_chord = (ex - sx).hypot(ey - sy);
+    let mut bounds = span(&[start, end]);
+    for (px, py) in [
+        (cx - radius, cy),
+        (cx + radius, cy),
+        (cx, cy - radius),
+        (cx, cy + radius),
+    ] {
+        let offset = side(px, py);
+        if offset.abs() > on_chord && offset.signum() == mid_side {
+            bounds = merge(
+                bounds,
+                [
+                    px.floor() as i64,
+                    py.floor() as i64,
+                    px.ceil() as i64,
+                    py.ceil() as i64,
+                ],
+            );
         }
-        None => span(&[start, mid, end]),
     }
+    bounds
 }
 
 /// Centre and radius of the circle through three points, if not collinear.
@@ -335,4 +362,33 @@ fn box_bounds(shape: &Shape2d, affine: &Affine2D) -> [i64; 4] {
     let max_x = corners.iter().map(|corner| corner.0).max().unwrap_or(0);
     let max_y = corners.iter().map(|corner| corner.1).max().unwrap_or(0);
     [min_x, min_y, max_x, max_y]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{arc_bounds, nm_point};
+
+    /// Mid points snap to the nanometre grid, which moves the circle by a
+    /// fraction of a nanometre, so boxes are compared within 2 nm.
+    fn assert_near(actual: [i64; 4], expected: [i64; 4]) {
+        assert!(
+            actual.iter().zip(expected).all(|(a, e)| (a - e).abs() <= 2),
+            "{actual:?} is not within 2 nm of {expected:?}"
+        );
+    }
+
+    #[test]
+    fn arc_bounds_cover_only_the_swept_extremes() {
+        let half = std::f64::consts::FRAC_1_SQRT_2;
+        let (east, north) = (nm_point(1.0, 0.0), nm_point(0.0, 1.0));
+        // Quarter arc: no axis extreme beyond its end points is swept.
+        let quarter = arc_bounds(&east, &nm_point(half, half), &north);
+        assert_near(quarter, [0, 0, 1_000_000, 1_000_000]);
+        // The complementary three-quarter arc sweeps the other extremes.
+        let major = arc_bounds(&east, &nm_point(-half, -half), &north);
+        assert_near(major, [-1_000_000, -1_000_000, 1_000_000, 1_000_000]);
+        // A half circle through (0, 1) reaches y = 1 but not y = -1.
+        let semi = arc_bounds(&nm_point(-1.0, 0.0), &north, &east);
+        assert_near(semi, [-1_000_000, 0, 1_000_000, 1_000_000]);
+    }
 }
