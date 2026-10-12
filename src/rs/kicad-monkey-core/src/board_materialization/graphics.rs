@@ -7,6 +7,7 @@
 //! for polygons. Stroke text uses core's Newstroke realization; outline text
 //! uses its render cache.
 
+use super::geometry::{mm, nm64};
 use super::routing::polyline_contour;
 use crate::board_plotter_ir::{
     BoardTextHAlign, BoardTextOperation, BoardTextRenderCacheCoordinateSpace, BoardTextVAlign,
@@ -425,14 +426,6 @@ fn keep_upright(angle: f64) -> f64 {
     angle
 }
 
-fn mm(value: i64) -> f64 {
-    value as f64 / 1_000_000.0
-}
-
-fn nm_of(value_mm: f64) -> i64 {
-    (value_mm * 1_000_000.0).round() as i64
-}
-
 /// Glyph shapes of one text item and the points that bound them.
 struct Glyphs {
     shapes: Vec<Shape2d>,
@@ -541,7 +534,7 @@ fn stroke_glyphs(spec: &TextSpec<'_>) -> Result<Glyphs, String> {
     };
     let realized = realize_newstroke_kicad_a0(request, NewstrokeLimits::default())
         .map_err(|cause| format!("text {:?}: {}", spec.text, cause.message))?;
-    let width = nm_of(realized.effective_stroke_width_mm);
+    let width = nm64(realized.effective_stroke_width_mm);
     let mut glyphs = Glyphs {
         shapes: Vec::new(),
         points: Vec::new(),
@@ -553,7 +546,7 @@ fn stroke_glyphs(spec: &TextSpec<'_>) -> Result<Glyphs, String> {
         let points: Vec<(i64, i64)> = polyline
             .points
             .iter()
-            .map(|p| (nm_of(p.x_mm), nm_of(p.y_mm)))
+            .map(|p| (nm64(p.x_mm), nm64(p.y_mm)))
             .collect();
         let Some((&(x, y), rest)) = points.split_first() else {
             continue;

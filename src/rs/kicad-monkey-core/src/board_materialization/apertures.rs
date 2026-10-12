@@ -9,7 +9,7 @@
 //! with a round-cornered `offset_nm`. Custom-rule (`.kicad_dru`) margins are
 //! not evaluated.
 
-use super::geometry::nm;
+use super::geometry::{mm, nm};
 use super::pads::as_loaded;
 use crate::pcb::{PcbFootprint, PcbPad, PcbResolvedPadCopperLayer, PcbSetup, PcbVia};
 
@@ -153,10 +153,6 @@ pub(crate) struct Aperture<'a> {
 /// Largest magnitude a margin or a grown size may take: the 32-bit
 /// nanometre range of the contract.
 const NM_LIMIT: i64 = i32::MAX as i64;
-
-fn mm(value_nm: i64) -> f64 {
-    value_nm as f64 / 1_000_000.0
-}
 
 fn offset(value_nm: i64) -> i32 {
     i32::try_from(value_nm).unwrap_or(if value_nm < 0 { i32::MIN } else { i32::MAX })

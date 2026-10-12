@@ -9,7 +9,7 @@
 //! Graphics on copper layers are copper; see [`copper_graphics`].
 
 use super::emit::{Emitter, Origin, source_uid};
-use super::geometry::{identity, rotation_translation};
+use super::geometry::{footprint_affine, identity, nm64};
 use super::graphics::{Drawn, circle, line_to, point, rect_shapes, swept};
 use super::nets::NetNames;
 use super::pads::{polygon, reference};
@@ -22,12 +22,8 @@ use kicad_monkey_contracts::generated::materialization_document::{
 /// KiCad's `DEFAULT_LINE_WIDTH` for unfilled shapes authored without one.
 const DEFAULT_LINE_WIDTH_NM: i64 = 100_000;
 
-fn nm(value_mm: f64) -> i64 {
-    (value_mm * 1_000_000.0).round() as i64
-}
-
 fn xy(value: PcbPoint) -> (i64, i64) {
-    (nm(value.x), nm(value.y))
+    (nm64(value.x), nm64(value.y))
 }
 
 /// Concrete layers a graphic is drawn on.
@@ -52,7 +48,7 @@ fn fill_and_stroke(graphic: &PcbGraphic, layer: &str, drawn: &mut Drawn) -> (boo
         }
         _ => true,
     };
-    let authored = nm(graphic.stroke_width.unwrap_or(0.0)).max(0);
+    let authored = nm64(graphic.stroke_width.unwrap_or(0.0)).max(0);
     let stroke = if authored == 0 && !solid {
         DEFAULT_LINE_WIDTH_NM
     } else {
@@ -138,7 +134,7 @@ fn closed_shapes(graphic: &PcbGraphic, solid: bool, stroke: i64) -> Vec<Shape2d>
                 return Vec::new();
             };
             let ((x1, y1), (x2, y2)) = (xy(start), xy(end));
-            let radius = nm(graphic.radius.unwrap_or(0.0));
+            let radius = nm64(graphic.radius.unwrap_or(0.0));
             rect_shapes([x1, y1, x2, y2], radius, stroke, solid)
                 .into_iter()
                 .collect()
@@ -192,11 +188,7 @@ pub(crate) fn copper_graphics(
             let footprint = footprints.get(owned.footprint_index)?;
             let graphic = &owned.graphic;
             let uid = source_uid("footprint_graphic", graphic.uuid.as_deref(), position);
-            let affine = rotation_translation(
-                -footprint.angle.unwrap_or_default(),
-                footprint.at_x.unwrap_or_default(),
-                footprint.at_y.unwrap_or_default(),
-            );
+            let affine = footprint_affine(footprint);
             let kind = BindingSourceKind::FootprintGraphic;
             Some((graphic, kind, uid, Some(reference(footprint)), affine))
         });

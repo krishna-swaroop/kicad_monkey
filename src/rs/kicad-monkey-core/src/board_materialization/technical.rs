@@ -17,7 +17,9 @@ use super::apertures::{
 };
 use super::emit::{Emitter, Material, Origin, source_uid};
 use super::geometry::nm;
-use super::geometry::{identity, origin as zero, rotation_translation};
+use super::geometry::{
+    footprint_affine, identity, origin as zero, place, placement_affine, rotation_translation,
+};
 use super::graphics::{Drawn, TextSpec, operation_shapes, text_shapes};
 use super::nets::net_key;
 use super::pads::reference;
@@ -206,12 +208,10 @@ fn footprint_box_text(
 
 /// A footprint-local text anchor in the board frame.
 fn board_anchor(operation: &BoardTextOperation, record: &BoardFootprintRecord) -> (i64, i64) {
-    let placement = &record.placement;
-    let angle = placement.angle_deg.to_radians();
-    let (x, y) = (operation.x as f64, operation.y as f64);
-    (
-        (x * angle.cos() + y * angle.sin() + placement.x_nm as f64).round() as i64,
-        (y * angle.cos() - x * angle.sin() + placement.y_nm as f64).round() as i64,
+    place(
+        &placement_affine(&record.placement),
+        operation.x,
+        operation.y,
     )
 }
 
@@ -224,11 +224,7 @@ fn footprint_graphics(
     keep: LayerFilter<'_>,
     out: &mut Vec<PlacedGraphic>,
 ) {
-    let placement = rotation_translation(
-        -record.placement.angle_deg,
-        record.placement.x_nm as f64 / 1_000_000.0,
-        record.placement.y_nm as f64 / 1_000_000.0,
-    );
+    let placement = placement_affine(&record.placement);
     for (position, operation) in record.operations.iter().enumerate() {
         let (metadata, kind) = match operation {
             BoardFootprintOperation::Text { metadata, .. } => {
@@ -517,11 +513,7 @@ fn source_graphics(graphics: &SourceGraphics<'_>, out: &mut Vec<PlacedGraphic>) 
         );
         let mut origin = unbound(BindingSourceKind::FootprintGraphic, uid);
         origin.refdes = Some(reference(footprint));
-        let affine = rotation_translation(
-            -footprint.angle.unwrap_or_default(),
-            footprint.at_x.unwrap_or_default(),
-            footprint.at_y.unwrap_or_default(),
-        );
+        let affine = footprint_affine(footprint);
         source_graphic(graphic, &origin, &affine, graphics.mask_margin_nm, out);
     }
 }

@@ -22,6 +22,8 @@
 //! buffered inside untagged unions do not decode straight from text; the
 //! decoder parses to a `Value` first, which does.
 
+mod chunking;
+mod scope;
 mod shapes;
 
 use crate::generated::materialization_document::{
@@ -30,6 +32,12 @@ use crate::generated::materialization_document::{
     SurfaceMaterial, SurfaceOperation,
 };
 use crate::{ValidationError, validation_error};
+pub use chunking::{
+    ChunkedOperations, chunk_operations, operation_bounds, operation_net, operation_product,
+    operation_slice,
+};
+use scope::{ALL_PRODUCTS, intersects};
+pub use scope::{canonical_scope, filter_document, scope_from_request};
 use shapes::{check_bounds_hold_shape, in_length_range, validate_shape};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -84,17 +92,6 @@ kind_deserializers! {
 const SCHEMA: &str = "kicad_monkey.materialization.a0";
 const TYPE: &str = "kicad_monkey.materialization.document";
 const NM_MAX: i64 = i32::MAX as i64;
-
-/// Every product; a complete materialization names all of them.
-const ALL_PRODUCTS: [MaterialProduct; 7] = [
-    MaterialProduct::Copper,
-    MaterialProduct::Holes,
-    MaterialProduct::Dielectric,
-    MaterialProduct::SolderMask,
-    MaterialProduct::Paste,
-    MaterialProduct::Silkscreen,
-    MaterialProduct::Components,
-];
 
 /// Known slices (with their order and role) and net keys of one document.
 struct Keys<'a> {
@@ -413,20 +410,6 @@ fn validate_diagnostics(document: &MaterializationDocumentA0) -> Result<(), Vali
     Ok(())
 }
 
-/// Product, slice, net, region, and the slice role each material needs.
-fn product_of(operation: &MaterialOperation) -> MaterialProduct {
-    match operation {
-        MaterialOperation::HoleOperation(_) => MaterialProduct::Holes,
-        MaterialOperation::SurfaceOperation(surface) => match surface.material {
-            SurfaceMaterial::Copper => MaterialProduct::Copper,
-            SurfaceMaterial::Dielectric => MaterialProduct::Dielectric,
-            SurfaceMaterial::SolderMask => MaterialProduct::SolderMask,
-            SurfaceMaterial::Paste => MaterialProduct::Paste,
-            SurfaceMaterial::Silkscreen => MaterialProduct::Silkscreen,
-        },
-    }
-}
-
 fn role_of(material: SurfaceMaterial) -> SliceRole {
     match material {
         SurfaceMaterial::Copper => SliceRole::Conductor,
@@ -434,27 +417,6 @@ fn role_of(material: SurfaceMaterial) -> SliceRole {
         SurfaceMaterial::SolderMask => SliceRole::SolderMask,
         SurfaceMaterial::Paste => SliceRole::Paste,
         SurfaceMaterial::Silkscreen => SliceRole::Silkscreen,
-    }
-}
-
-fn operation_slice(operation: &MaterialOperation) -> &str {
-    match operation {
-        MaterialOperation::SurfaceOperation(surface) => &surface.slice_key,
-        MaterialOperation::HoleOperation(hole) => &hole.start_slice_key,
-    }
-}
-
-fn operation_bounds(operation: &MaterialOperation) -> &NmBounds {
-    match operation {
-        MaterialOperation::SurfaceOperation(surface) => &surface.bounds,
-        MaterialOperation::HoleOperation(hole) => &hole.bounds,
-    }
-}
-
-fn operation_net(operation: &MaterialOperation) -> Option<&str> {
-    match operation {
-        MaterialOperation::SurfaceOperation(surface) => surface.net_key.as_deref(),
-        MaterialOperation::HoleOperation(hole) => hole.net_key.as_deref(),
     }
 }
 
@@ -486,7 +448,7 @@ fn check_in_scope(
     keys: &Keys<'_>,
     path: &str,
 ) -> Result<(), ValidationError> {
-    let product = scope.products.contains(&product_of(operation));
+    let product = scope.products.contains(&operation_product(operation));
     let selected: BTreeSet<u32> = scope
         .slice_keys
         .iter()
@@ -520,13 +482,6 @@ fn check_in_scope(
         return Ok(());
     }
     Err(out_of_scope(path.to_owned()))
-}
-
-fn intersects(a: &NmBounds, b: &NmBounds) -> bool {
-    *a.min_x_nm <= *b.max_x_nm
-        && *b.min_x_nm <= *a.max_x_nm
-        && *a.min_y_nm <= *b.max_y_nm
-        && *b.min_y_nm <= *a.max_y_nm
 }
 
 fn check_index(index: u32, position: usize, path: &str) -> Result<(), ValidationError> {
@@ -804,16 +759,6 @@ fn validate_chunk_directory(
     Ok(next)
 }
 
-/// Tile holding the centre of `bounds`, by floor division.
-fn tile_of(bounds: &NmBounds, tile_size_nm: i64) -> (i64, i64) {
-    let centre = |low: i32, high: i32| (i64::from(low) + i64::from(high)).div_euclid(2);
-    let size = tile_size_nm.max(1);
-    (
-        centre(bounds.min_x_nm.0, bounds.max_x_nm.0).div_euclid(size),
-        centre(bounds.min_y_nm.0, bounds.max_y_nm.0).div_euclid(size),
-    )
-}
-
 /// Members of a chunk lie on its slice, inside its bounds, in its tile, and
 /// its net list is exactly their distinct nets.
 fn check_chunk_members(
@@ -831,7 +776,7 @@ fn check_chunk_members(
             "chunk range exceeds operations",
         )
     })?;
-    let tile = (i64::from(chunk.tile_x), i64::from(chunk.tile_y));
+    let tile = (chunk.tile_x, chunk.tile_y);
     let mut nets = BTreeSet::new();
     for operation in members {
         let bounds = operation_bounds(operation);
@@ -841,7 +786,7 @@ fn check_chunk_members(
             && *chunk.bounds.max_y_nm >= *bounds.max_y_nm;
         if operation_slice(operation) != chunk.slice_key
             || !inside
-            || tile_of(bounds, *document.scope.tile_size_nm) != tile
+            || chunking::tile_of(bounds, *document.scope.tile_size_nm) != tile
         {
             return Err(validation_error(
                 "invalid_chunk_member",

@@ -3,7 +3,9 @@
 //! Every board and footprint `Edge.Cuts` carrier becomes exact edges in the
 //! board frame: lines, three-point arcs, and cubic Béziers, plus closed
 //! loops for rectangles, circles, and polygons. Open edges are chained end
-//! to end within [`CHAIN_TOLERANCE_NM`]. Loops are nested by even-odd
+//! to end within [`CHAIN_TOLERANCE_NM`] (KiCad's outline chaining epsilon),
+//! through a grid of endpoints so chaining stays near linear. Loops are
+//! nested by even-odd
 //! containment: even-depth loops are board regions and the loops directly
 //! inside them are cutouts. Loops below [`MIN_LOOP_AREA_NM2`] are dropped.
 
@@ -16,8 +18,9 @@ use kicad_monkey_contracts::generated::materialization_document::{
     ArcSegment, Contour, CubicSegment, LineSegment, Nm, NmPoint, PathSegment, PlanarRegion2d,
 };
 
-/// Endpoints closer than this are the same point when chaining.
-pub(crate) const CHAIN_TOLERANCE_NM: i64 = 1_000;
+/// Endpoints within this Euclidean distance are the same point when
+/// chaining: KiCad's `DEFAULT_CHAINING_EPSILON_MM` of 0.01 mm.
+pub(crate) const CHAIN_TOLERANCE_NM: i64 = 10_000;
 /// Loops enclosing less area than 1e-4 mm² are discarded.
 pub(crate) const MIN_LOOP_AREA_NM2: f64 = 1.0e8;
 const SAMPLES_PER_CURVE: usize = 16;
@@ -267,40 +270,94 @@ impl Pieces {
 }
 
 fn near(a: Xy, b: Xy) -> bool {
-    (a.0 - b.0).abs() <= CHAIN_TOLERANCE_NM && (a.1 - b.1).abs() <= CHAIN_TOLERANCE_NM
+    let (dx, dy) = (i128::from(a.0 - b.0), i128::from(a.1 - b.1));
+    dx * dx + dy * dy <= i128::from(CHAIN_TOLERANCE_NM) * i128::from(CHAIN_TOLERANCE_NM)
+}
+
+/// Open edges indexed by the grid cells of their endpoints; a cell is one
+/// tolerance wide, so every near endpoint is in the 3 x 3 cells around.
+struct Endpoints {
+    edges: Vec<Edge>,
+    used: Vec<bool>,
+    cells: std::collections::HashMap<Xy, Vec<usize>>,
+}
+
+fn cell(point: Xy) -> Xy {
+    (
+        point.0.div_euclid(CHAIN_TOLERANCE_NM),
+        point.1.div_euclid(CHAIN_TOLERANCE_NM),
+    )
+}
+
+impl Endpoints {
+    fn new(edges: Vec<Edge>) -> Self {
+        let mut cells: std::collections::HashMap<Xy, Vec<usize>> = Default::default();
+        for (index, edge) in edges.iter().enumerate() {
+            for end in [edge.start, end_of(&edge.segment)] {
+                cells.entry(cell(end)).or_default().push(index);
+            }
+        }
+        Self {
+            used: vec![false; edges.len()],
+            edges,
+            cells,
+        }
+    }
+
+    /// The lowest-index unused edge with an endpoint near `point`, oriented
+    /// to start there.
+    fn take_near(&mut self, point: Xy) -> Option<Edge> {
+        let (cx, cy) = cell(point);
+        let mut best: Option<usize> = None;
+        for key in (-1..=1).flat_map(|dx| (-1..=1).map(move |dy| (cx + dx, cy + dy))) {
+            for &index in self.cells.get(&key).into_iter().flatten() {
+                let edge = &self.edges[index];
+                let touches = near(edge.start, point) || near(end_of(&edge.segment), point);
+                if !self.used[index] && touches && best.is_none_or(|b| index < b) {
+                    best = Some(index);
+                }
+            }
+        }
+        let index = best?;
+        self.used[index] = true;
+        let edge = &self.edges[index];
+        Some(if near(edge.start, point) {
+            edge.clone()
+        } else {
+            reversed(edge)
+        })
+    }
 }
 
 /// Grow `path` from its tail with matching edges until it closes or no
 /// edge continues it.
-fn extend(path: &mut Vec<Edge>, edges: &mut Vec<Edge>) {
+fn extend(path: &mut Vec<Edge>, endpoints: &mut Endpoints) {
     loop {
         let tail = end_of(&path[path.len() - 1].segment);
         if path.len() > 1 && near(tail, path[0].start) {
             return;
         }
-        let Some(position) = edges
-            .iter()
-            .position(|edge| near(edge.start, tail) || near(end_of(&edge.segment), tail))
-        else {
+        let Some(edge) = endpoints.take_near(tail) else {
             return;
         };
-        let edge = edges.swap_remove(position);
-        path.push(if near(edge.start, tail) {
-            edge
-        } else {
-            reversed(&edge)
-        });
+        path.push(edge);
     }
 }
 
-/// Chain open edges into closed contours. Returns the contours and the
-/// number of edges that could not be closed into a loop.
-fn chain(mut edges: Vec<Edge>) -> (Vec<Contour>, usize) {
+/// Chain open edges into closed contours, starting from the lowest unused
+/// edge each time. Returns the contours and the number of edges that could
+/// not be closed into a loop.
+fn chain(edges: Vec<Edge>) -> (Vec<Contour>, usize) {
+    let mut endpoints = Endpoints::new(edges);
     let mut contours = Vec::new();
     let mut unclosed = 0usize;
-    while let Some(first) = edges.pop() {
-        let mut path = vec![first];
-        extend(&mut path, &mut edges);
+    for first in 0..endpoints.edges.len() {
+        if endpoints.used[first] {
+            continue;
+        }
+        endpoints.used[first] = true;
+        let mut path = vec![endpoints.edges[first].clone()];
+        extend(&mut path, &mut endpoints);
         if near(end_of(&path[path.len() - 1].segment), path[0].start) {
             contours.push(Contour {
                 start_nm: point(path[0].start),
@@ -445,5 +502,69 @@ pub(crate) fn close_profile(
     Profile {
         regions,
         unclosed_edges,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CHAIN_TOLERANCE_NM, Edge, chain, line};
+
+    /// A closed polygon of `sides` line edges on a circle of `radius_nm`,
+    /// listed in a scrambled order, with every other edge reversed, and
+    /// each start nudged by `gap_nm` from its predecessor's end.
+    fn polygon(sides: usize, radius_nm: f64, gap_nm: i64) -> Vec<Edge> {
+        let vertex = |index: usize| {
+            let angle = std::f64::consts::TAU * index as f64 / sides as f64;
+            (
+                (radius_nm * angle.cos()).round() as i64,
+                (radius_nm * angle.sin()).round() as i64,
+            )
+        };
+        let mut edges: Vec<Edge> = (0..sides)
+            .map(|index| {
+                let (start, end) = (vertex(index), vertex((index + 1) % sides));
+                let start = (start.0 + gap_nm, start.1);
+                if index % 2 == 0 {
+                    Edge {
+                        start,
+                        segment: line(end),
+                    }
+                } else {
+                    Edge {
+                        start: end,
+                        segment: line(start),
+                    }
+                }
+            })
+            .collect();
+        // A fixed stride permutation, so the chain must search.
+        let stride = 7919 % sides.max(1);
+        let order: Vec<usize> = (0..sides).map(|i| (i * stride.max(1)) % sides).collect();
+        if order
+            .iter()
+            .collect::<std::collections::BTreeSet<_>>()
+            .len()
+            == sides
+        {
+            edges = order.into_iter().map(|i| edges[i].clone()).collect();
+        }
+        edges
+    }
+
+    #[test]
+    fn endpoints_within_kicads_epsilon_chain_and_farther_ones_do_not() {
+        let (closed, unclosed) = chain(polygon(12, 5_000_000.0, CHAIN_TOLERANCE_NM));
+        assert_eq!((closed.len(), unclosed), (1, 0));
+        assert_eq!(closed[0].segments.len(), 12);
+        let (closed, unclosed) = chain(polygon(12, 5_000_000.0, CHAIN_TOLERANCE_NM + 1));
+        assert!(closed.is_empty());
+        assert_eq!(unclosed, 12);
+    }
+
+    #[test]
+    fn large_outlines_chain_into_one_loop() {
+        let (closed, unclosed) = chain(polygon(60_000, 1_000_000_000.0, 3_000));
+        assert_eq!((closed.len(), unclosed), (1, 0));
+        assert_eq!(closed[0].segments.len(), 60_000);
     }
 }

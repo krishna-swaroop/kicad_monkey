@@ -1,10 +1,11 @@
 //! Review batch 2 evidence: request boundaries and limits, reported layer
 //! drops, extreme margins, footprint knockout text, and footprint text-box
-//! borders.
+//! borders. Review batch 5 adds region filtering and the legacy footprint
+//! paste-ratio spelling.
 
 use kicad_monkey_contracts::generated::materialization_request::MaterializationRequestA0;
 use kicad_monkey_contracts::materialization_contract::validate_materialization_document;
-use kicad_monkey_core::board_materialization::materialize_board;
+use kicad_monkey_core::board_materialization::{filter_document, materialize_board};
 use serde_json::{Value, json};
 
 fn request(products: &[&str], extra: Value) -> MaterializationRequestA0 {
@@ -154,5 +155,69 @@ fn footprint_knockout_text_and_text_box_borders_are_drawn() {
             .iter()
             .any(|op| op["shape"]["kind"] == "swept_path_2d" && op["shape"]["width_nm"] == 150_000),
         "the 0.15 mm border is drawn"
+    );
+}
+
+#[test]
+fn a_region_keeps_exactly_what_meets_it_and_keeps_rule_two() {
+    // Around the VCC track at y = 7 mm only; GND tracks sit at 5 and 6 mm.
+    let region = json!({ "region": {
+        "min_x_nm": 22_000_000, "min_y_nm": 6_900_000,
+        "max_x_nm": 24_000_000, "max_y_nm": 7_100_000 } });
+    let selective =
+        materialize_board(&board("0.05"), &request(&["copper"], region)).expect("region");
+    validate_materialization_document(&selective).expect("valid");
+    let value = serde_json::to_value(&selective).expect("serialize");
+    let uids: Vec<&str> = value["binding"]
+        .as_array()
+        .expect("binding")
+        .iter()
+        .filter_map(|entry| entry["source_uid"].as_str())
+        .collect();
+    assert_eq!(uids, ["vcc-a"]);
+    assert!(!selective.scope.complete);
+    let complete = materialize_board(&board("0.05"), &request(&["copper"], json!({})))
+        .expect("complete copper");
+    assert_eq!(
+        serde_json::to_value(filter_document(&complete, &selective.scope)).expect("serialize"),
+        value,
+        "rule 2 with a region"
+    );
+}
+
+/// One footprint with a 1 x 2 mm paste pad and a footprint paste ratio,
+/// spelled `RATIO`.
+const PASTE: &str = r#"(kicad_pcb
+  (version 20240108)
+  (generator pcbnew)
+  (general (thickness 1.6))
+  (layers (0 "F.Cu" signal) (31 "B.Cu" signal) (35 "F.Paste" user) (39 "F.Mask" user)
+    (44 "Edge.Cuts" user))
+  (setup (pad_to_mask_clearance 0))
+  (net 0 "")
+  (footprint "Demo:P"
+    (layer "F.Cu")
+    (at 10 10)
+    (RATIO -0.25)
+    (pad "1" smd rect (at 0 0) (size 1 2) (layers "F.Cu" "F.Paste") (uuid paste-pad)))
+  (gr_rect (start 0 0) (end 20 20) (stroke (width 0.1) (type solid)) (layer "Edge.Cuts"))
+)
+"#;
+
+#[test]
+fn the_legacy_footprint_paste_ratio_spelling_shrinks_paste_like_the_current_one() {
+    let paste = |spelling: &str| {
+        let source = PASTE.replace("RATIO", spelling);
+        let document = materialize_board(&source, &request(&["paste"], json!({}))).expect("ok");
+        serde_json::to_value(&document.operations).expect("serialize")
+    };
+    let legacy = paste("solder_paste_ratio");
+    assert_eq!(legacy, paste("solder_paste_margin_ratio"));
+    // Each axis shrinks by a quarter of its own size: 1 x 2 mm becomes
+    // 0.5 x 1 mm.
+    let shape = &legacy[0]["shape"];
+    assert_eq!(
+        (shape["width_nm"].clone(), shape["height_nm"].clone()),
+        (json!(500_000), json!(1_000_000))
     );
 }

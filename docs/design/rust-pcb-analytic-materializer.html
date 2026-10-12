@@ -202,7 +202,9 @@
       <tr><td>Placement</td><td><code>footprint_transforms()</code></td>
         <td>Composed affines and component records.</td></tr>
       <tr><td>Selective reads</td><td><code>PcbSelection</code></td>
-        <td>Request-scope pushdown.</td></tr>
+        <td>Request-scope pushdown, in slice 5. Until then the producer
+          reads one fixed family selection and filters after
+          emission.</td></tr>
       <tr><td>Net classes</td><td>The project reader (<code>.kicad_pro</code>
         net settings)</td><td>Class resolution, rules, and differential
         pairing.</td></tr>
@@ -211,6 +213,38 @@
         to it on <code>refdes</code> plus <code>pad_number</code>.</td></tr>
     </tbody>
   </table>
+
+  <h3>Changes outside the materializer</h3>
+  <p>The materializer is not confined to its own module. This branch also
+  changes:</p>
+  <ul>
+    <li><strong>PCB decoding</strong> (<code>pcb.rs</code>,
+      <code>pcb/decode.rs</code>, <code>pcb/setup.rs</code>,
+      <code>pcb/vias.rs</code>, <code>pcb/zones.rs</code>,
+      <code>pcb/indexing.rs</code>, <code>pcb/footprints.rs</code>):
+      <ul>
+        <li>layers and mask margin on tracks and arcs;</li>
+        <li>board mask, paste, and tenting setup;</li>
+        <li>the legacy footprint paste-ratio spelling;</li>
+        <li>dielectric sub-layers;</li>
+        <li>the legacy per-via tenting form;</li>
+        <li>whether a zone declares <code>filled_areas_thickness</code>;</li>
+        <li>zones inside footprints.</li>
+      </ul></li>
+    <li><strong>Text</strong> (<code>newstroke.rs</code>): the KiCad-exact
+      entry point <code>realize_newstroke_kicad_a0</code>, with KiCad's
+      italic shear and line positions.</li>
+    <li><strong>Exports</strong> (<code>lib.rs</code>): the new PCB records
+      and the text entry point.</li>
+    <li><strong>Contracts:</strong>
+      <ul>
+        <li>the a0 contract, its validator, chunking, and the scope
+          filter;</li>
+        <li><code>ValidationError</code>, moved to its own module;</li>
+        <li>codegen hooks for the materialization schemas;</li>
+        <li>inline array lengths in the Python generator.</li>
+      </ul></li>
+  </ul>
 
   <h2>Contract: kicad_monkey.materialization.a0</h2>
   <ul>
@@ -242,8 +276,8 @@
       <code>refdes</code>, <code>pad_number</code>, and
       <code>net_key</code>.</li>
     <li><strong>Chunk index:</strong> for each (slice, tile), the bounds,
-      the <code>net_keys</code>, the byte size, and the range of operation
-      indices.</li>
+      the <code>net_keys</code>, and the range of operation indices. Byte
+      offsets into the packed columns come with the slice-5 writer.</li>
   </ul>
   <h3>Correctness rules</h3>
   <ol>
@@ -424,8 +458,10 @@
     <li><strong>Profile closure.</strong> Board and footprint
       <code>Edge.Cuts</code> carriers become exact edges in the board frame:
       lines, arcs, and cubics. Rectangles, circles, and polygons are already
-      closed loops. Open edges are chained end to end within 1 µm, and
-      reversed when needed. Loops below 1e-4 mm² are dropped. Loops nest by
+      closed loops. Open edges are chained end to end within 10 µm
+      (Euclidean, KiCad's outline chaining epsilon), and reversed when
+      needed. Endpoints are looked up in a grid one tolerance wide, so
+      chaining is near linear. Loops below 1e-4 mm² are dropped. Loops nest by
       even-odd containment: each even-depth loop is a region, and the loops
       directly inside it are its cutouts, which also handles panels.
       Unclosed edges are reported as <code>outline_not_closed</code>, and a
@@ -721,6 +757,49 @@
           <code>PackError::Invalid</code> when a rule breaks.</li>
         <li><code>stack_regions</code> stays with slice 4, as planned
           above.</li>
+      </ul></li>
+    <li><strong>Review batch 5: tests, docs, deduplication, outline
+      chaining.</strong>
+      <ul>
+        <li>Outline chaining uses KiCad's 10 µm Euclidean epsilon and an
+          endpoint grid. A 60,000-edge outline chains in about 0.3 s in a
+          debug build; the review measured 3.4 s for the old
+          scan.</li>
+        <li>New tests:
+          <ul>
+            <li>rule 1, comparing a projected and a full-model view of the
+              same board;</li>
+            <li>region filtering, with rule 2 under a region;</li>
+            <li>the legacy footprint <code>solder_paste_ratio</code>
+              spelling;</li>
+            <li>KiCad's italic shear and line positions in
+              <code>realize_newstroke_kicad_a0</code>;</li>
+            <li>the chaining tolerance on both sides of 10 µm.</li>
+          </ul></li>
+        <li>Deduplication:
+          <ul>
+            <li>One millimetre and nanometre conversion family
+              (<code>nm</code>, <code>nm64</code>, <code>length</code>,
+              <code>mm</code>), all saturating to the contract's 32-bit
+              range.</li>
+            <li>One footprint placement (<code>footprint_affine</code>,
+              <code>placement_affine</code>).</li>
+            <li>Chunking and the scope filter now live in
+              <code>kicad_monkey_contracts::materialization_contract</code>,
+              so contract-only readers (WASM viewers, engines) can filter
+              without the KiCad parser. The validator shares their helpers.
+              Core re-exports them unchanged.</li>
+          </ul></li>
+        <li>Hygiene:
+          <ul>
+            <li><code>ValidationError</code> moved to its own module, so the
+              contracts <code>lib.rs</code> is under its baseline.</li>
+            <li>The materialization codegen specifics moved to their own
+              module. The codegen <code>main.rs</code> keeps only three
+              hook lines beyond upstream.</li>
+          </ul></li>
+        <li>The doc no longer claims a chunk byte size or scope pushdown,
+          and lists the branch's changes outside the materializer.</li>
       </ul></li>
   </ul>
   <h3>Evidence</h3>

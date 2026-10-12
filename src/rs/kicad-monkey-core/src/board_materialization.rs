@@ -16,7 +16,6 @@
 //! stack, nets, binding, and component records.
 
 mod apertures;
-mod chunking;
 mod dielectric;
 mod emit;
 mod flash;
@@ -29,16 +28,15 @@ mod pads;
 mod producer;
 mod profile;
 mod routing;
-mod scope;
 mod sexpr_view;
 mod source_graphics;
 mod stack;
 mod technical;
 
-pub use chunking::{
-    chunk_operations, operation_bounds, operation_net, operation_product, operation_slice,
+pub use kicad_monkey_contracts::materialization_contract::{
+    chunk_operations, filter_document, operation_bounds, operation_net, operation_product,
+    operation_slice, scope_from_request,
 };
-pub use scope::{filter_document, scope_from_request};
 pub use sexpr_view::materialization_sexpr;
 
 use kicad_monkey_contracts::generated::materialization_document::{

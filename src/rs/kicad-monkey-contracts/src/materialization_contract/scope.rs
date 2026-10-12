@@ -5,16 +5,17 @@
 //! filter. Tests compare selective producer output against it.
 
 use super::chunking::{chunk_operations, operation_bounds, operation_net, operation_product};
-use kicad_monkey_contracts::generated::materialization_document::{
+use crate::generated::materialization_document::{
     BindingEntry, HoleOperation, MaterialOperation, MaterialProduct, MaterializationDocumentA0,
     MaterializationScope, Nm, NmBounds, NonNegativeNm,
 };
-use kicad_monkey_contracts::generated::materialization_request::{
+use crate::generated::materialization_request::{
     MaterialProduct as RequestProduct, MaterializationRequestA0, NmBounds as RequestBounds,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
-const ALL_PRODUCTS: [MaterialProduct; 7] = [
+/// Every product; a complete materialization names all of them.
+pub(super) const ALL_PRODUCTS: [MaterialProduct; 7] = [
     MaterialProduct::Copper,
     MaterialProduct::Holes,
     MaterialProduct::Dielectric,
@@ -130,7 +131,7 @@ impl Filter<'_> {
     }
 }
 
-fn intersects(a: &NmBounds, b: &NmBounds) -> bool {
+pub(super) fn intersects(a: &NmBounds, b: &NmBounds) -> bool {
     *a.min_x_nm <= *b.max_x_nm
         && *b.min_x_nm <= *a.max_x_nm
         && *a.min_y_nm <= *b.max_y_nm

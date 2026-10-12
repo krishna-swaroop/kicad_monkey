@@ -83,7 +83,48 @@ const MATERIALIZATION_OPERATION_KINDS: [(&str, &str, &str); 2] = [
     ),
 ];
 
-pub(crate) fn validate_materialization_kinds(schema_name: &str, schema: &Value) -> Result<()> {
+/// Materialization schemas and their generated modules.
+pub(crate) const SCHEMAS: [(&str, &str); 2] = [
+    ("MaterializationRequest.json", "materialization_request.rs"),
+    (
+        "MaterializationDocument.json",
+        "materialization_document.rs",
+    ),
+];
+
+/// `others` followed by the materialization schemas.
+pub(crate) fn with_schemas<const N: usize>(
+    others: [(&'static str, &'static str); N],
+) -> impl Iterator<Item = (&'static str, &'static str)> {
+    others.into_iter().chain(SCHEMAS)
+}
+
+pub(crate) fn is_schema(schema_name: &str) -> bool {
+    SCHEMAS.iter().any(|(name, _)| *name == schema_name)
+}
+
+/// Check the document's exact-kind unions and promote them from `anyOf` to
+/// `oneOf`, as the plot record unions are, so typify emits proper enums.
+pub(crate) fn project_schema(schema_name: &str, schema: &mut Value) -> Result<()> {
+    if schema_name != "MaterializationDocument.json" {
+        return Ok(());
+    }
+    validate_kinds(schema_name, schema)?;
+    for pointer in [
+        "/$defs/Shape2d",
+        "/$defs/PathSegment",
+        "/$defs/MaterialOperation",
+    ] {
+        if let Some(record) = schema.pointer_mut(pointer).and_then(Value::as_object_mut)
+            && let Some(members) = record.remove("anyOf")
+        {
+            record.insert("oneOf".to_owned(), members);
+        }
+    }
+    Ok(())
+}
+
+fn validate_kinds(schema_name: &str, schema: &Value) -> Result<()> {
     validate_operation_union(schema_name, schema, "Shape2d", &MATERIALIZATION_SHAPE_KINDS)?;
     validate_operation_union(
         schema_name,
@@ -99,10 +140,7 @@ pub(crate) fn validate_materialization_kinds(schema_name: &str, schema: &Value) 
     )
 }
 
-pub(crate) fn project_materialization_kinds(
-    schema_name: &str,
-    mut source: String,
-) -> Result<String> {
+pub(crate) fn project_kinds(schema_name: &str, mut source: String) -> Result<String> {
     if schema_name != "MaterializationDocument.json" {
         return Ok(source);
     }

@@ -4,7 +4,7 @@
 //! [`chunk_operations`], so a selective materialization and the same filter
 //! applied to a complete one order, index, and chunk identically.
 
-use kicad_monkey_contracts::generated::materialization_document::{
+use crate::generated::materialization_document::{
     ChunkEntry, MaterialOperation, MaterialProduct, Nm, NmBounds, SurfaceMaterial,
 };
 use std::collections::{BTreeMap, BTreeSet};
@@ -56,7 +56,7 @@ fn set_index(operation: &mut MaterialOperation, index: u32) {
 
 /// Tile containing the centre of `bounds`, using floor division so negative
 /// coordinates fall into negative tiles.
-fn tile_of(bounds: &NmBounds, tile_size_nm: i64) -> (i32, i32) {
+pub(super) fn tile_of(bounds: &NmBounds, tile_size_nm: i64) -> (i32, i32) {
     let centre = |low: &Nm, high: &Nm| (i64::from(**low) + i64::from(**high)).div_euclid(2);
     let tile = |value: i64| {
         let index = value.div_euclid(tile_size_nm.max(1));

@@ -1,8 +1,9 @@
 //! Unit conversion, affines, and analytic bounds for materialized shapes.
 
-use crate::pcb::PcbPoint;
+use crate::board_plotter_ir::BoardFootprintPlacement;
+use crate::pcb::{PcbFootprint, PcbPoint};
 use kicad_monkey_contracts::generated::materialization_document::{
-    Affine2D, Contour, Nm, NmBounds, NmPoint, PathSegment, Shape2d,
+    Affine2D, Contour, Nm, NmBounds, NmPoint, NonNegativeNm, PathSegment, Shape2d,
 };
 
 const NM_PER_MM: f64 = 1_000_000.0;
@@ -14,6 +15,21 @@ pub(crate) fn nm(value_mm: f64) -> i32 {
         return 0;
     }
     scaled.clamp(f64::from(i32::MIN), f64::from(i32::MAX)) as i32
+}
+
+/// [`nm`] widened for arithmetic, with the same saturation.
+pub(crate) fn nm64(value_mm: f64) -> i64 {
+    i64::from(nm(value_mm))
+}
+
+/// Millimetres to a non-negative length, saturated like [`nm`].
+pub(crate) fn length(value_mm: f64) -> NonNegativeNm {
+    NonNegativeNm(nm64(value_mm).max(0))
+}
+
+/// Nanometres to millimetres.
+pub(crate) fn mm(value_nm: i64) -> f64 {
+    value_nm as f64 / NM_PER_MM
 }
 
 pub(crate) fn nm_point(x_mm: f64, y_mm: f64) -> NmPoint {
@@ -45,6 +61,28 @@ pub(crate) fn rotation_translation(angle_deg: f64, x_mm: f64, y_mm: f64) -> Affi
         tx_nm: Nm(nm(x_mm)),
         ty_nm: Nm(nm(y_mm)),
     }
+}
+
+/// Board placement of a footprint: its rotation, then its position.
+/// KiCad angles turn counter-clockwise on screen, which is clockwise in the
+/// Y-down board frame, hence the negated angle.
+pub(crate) fn footprint_affine(footprint: &PcbFootprint) -> Affine2D {
+    rotation_translation(
+        -footprint.angle.unwrap_or_default(),
+        footprint.at_x.unwrap_or_default(),
+        footprint.at_y.unwrap_or_default(),
+    )
+}
+
+/// [`footprint_affine`] for a plot document's footprint record.
+pub(crate) fn placement_affine(placement: &BoardFootprintPlacement) -> Affine2D {
+    rotation_translation(-placement.angle_deg, mm(placement.x_nm), mm(placement.y_nm))
+}
+
+/// `affine` applied to a local point, rounded to whole nanometres.
+pub(crate) fn place(affine: &Affine2D, x: i64, y: i64) -> (i64, i64) {
+    let (board_x, board_y) = apply(affine, x, y);
+    (board_x.round() as i64, board_y.round() as i64)
 }
 
 /// Snap trig values that are within rounding noise of -1, 0, or 1 so right
@@ -219,8 +257,8 @@ fn cubic_extrema(a: i64, b: i64, c: i64, d: i64) -> Vec<f64> {
     roots.into_iter().filter(|t| *t > 0.0 && *t < 1.0).collect()
 }
 
-/// Bounds of a line/arc/cubic path; arcs contribute their full circle's box when
-/// the three points are not collinear, which is conservative and cheap.
+/// Bounds of a line/arc/cubic path: arcs contribute their swept extremes and
+/// cubics their exact extrema.
 fn path_bounds(start: &NmPoint, segments: &[PathSegment]) -> [i64; 4] {
     let mut bounds = span(&[start]);
     let mut previous = start.clone();

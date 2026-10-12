@@ -7,7 +7,7 @@
 
 use super::emit::source_uid;
 use super::emit::{Emitter, Origin};
-use super::geometry::{nm, origin, pcb_point, rotate_mm, rotation_translation};
+use super::geometry::{length, nm, origin, pcb_point, rotate_mm, rotation_translation};
 use super::graphics::rect_shapes;
 use super::nets::net_key;
 use super::routing::polyline_contour;
@@ -25,12 +25,8 @@ use kicad_monkey_contracts::generated::materialization_document::{
 /// A corner radius or chamfer, clamped in whole nanometres to half the
 /// shorter side as the sides themselves round, so it is always valid.
 fn corner_size(value_mm: f64, width_mm: f64, height_mm: f64) -> NonNegativeNm {
-    let half = (*len(width_mm)).min(*len(height_mm)) / 2;
-    NonNegativeNm((*len(value_mm)).clamp(0, half))
-}
-
-fn len(value_mm: f64) -> NonNegativeNm {
-    NonNegativeNm(i64::from(nm(value_mm)).max(0))
+    let half = (*length(width_mm)).min(*length(height_mm)) / 2;
+    NonNegativeNm((*length(value_mm)).clamp(0, half))
 }
 
 fn at(x_mm: f64, y_mm: f64) -> NmPoint {
@@ -215,21 +211,21 @@ fn standard_shape(resolved: &PcbResolvedPadCopperLayer<'_>) -> Option<Shape2d> {
         "rect" => Some(Shape2d::Rect2d(Rect2d {
             kind: "rect_2d".to_owned(),
             center_nm: origin(),
-            width_nm: len(width),
-            height_nm: len(height),
+            width_nm: length(width),
+            height_nm: length(height),
         })),
         "roundrect" => Some(Shape2d::RoundedRect2d(RoundedRect2d {
             kind: "rounded_rect_2d".to_owned(),
             center_nm: origin(),
-            width_nm: len(width),
-            height_nm: len(height),
+            width_nm: length(width),
+            height_nm: length(height),
             radius_nm: corner_size(short * resolved.roundrect_rratio, width, height),
         })),
         "trapezoid" => Some(Shape2d::Trapezoid2d(Trapezoid2d {
             kind: "trapezoid_2d".to_owned(),
             center_nm: origin(),
-            width_nm: len(width),
-            height_nm: len(height),
+            width_nm: length(width),
+            height_nm: length(height),
             delta_x_nm: Nm(nm(resolved.rect_delta.x)),
             delta_y_nm: Nm(nm(resolved.rect_delta.y)),
         })),
@@ -241,7 +237,7 @@ fn disk(radius_mm: f64) -> Shape2d {
     Shape2d::Disk2d(Disk2d {
         kind: "disk_2d".to_owned(),
         center_nm: origin(),
-        radius_nm: len(radius_mm),
+        radius_nm: length(radius_mm),
     })
 }
 
@@ -257,7 +253,7 @@ pub(crate) fn oval(width: f64, height: f64) -> Shape2d {
         kind: "capsule_2d".to_owned(),
         start_nm: start,
         end_nm: end,
-        radius_nm: len(radius),
+        radius_nm: length(radius),
     })
 }
 
@@ -276,8 +272,8 @@ fn chamfered_rect(resolved: &PcbResolvedPadCopperLayer<'_>, width: f64, height: 
     Shape2d::ChamferedRect2d(ChamferedRect2d {
         kind: "chamfered_rect_2d".to_owned(),
         center_nm: origin(),
-        width_nm: len(width),
-        height_nm: len(height),
+        width_nm: length(width),
+        height_nm: length(height),
         chamfer_nm: corner_size(short * resolved.chamfer_ratio, width, height),
         chamfered_corners: resolved
             .chamfer_corners
@@ -300,8 +296,8 @@ fn custom_shapes(
             Shape2d::Rect2d(Rect2d {
                 kind: "rect_2d".to_owned(),
                 center_nm: self::origin(),
-                width_nm: len(width),
-                height_nm: len(height),
+                width_nm: length(width),
+                height_nm: length(height),
             })
         } else {
             // KiCad sizes a circular anchor by its X size.
@@ -330,7 +326,7 @@ fn stroke(start: PcbPoint, segment: PathSegment, width: f64) -> Shape2d {
         kind: "swept_path_2d".to_owned(),
         start_nm: pcb_point(start),
         segments: vec![segment],
-        width_nm: len(width),
+        width_nm: length(width),
         cap: PathCap::Round,
         join: PathJoin::Round,
     })
@@ -422,14 +418,14 @@ fn circle(center: PcbPoint, end: PcbPoint, width: f64, filled: bool) -> Option<S
         return Some(Shape2d::Disk2d(Disk2d {
             kind: "disk_2d".to_owned(),
             center_nm: pcb_point(center),
-            radius_nm: len(outer),
+            radius_nm: length(outer),
         }));
     }
     Some(Shape2d::Annulus2d(Annulus2d {
         kind: "annulus_2d".to_owned(),
         center_nm: pcb_point(center),
-        outer_radius_nm: len(outer),
-        inner_radius_nm: len(radius - width / 2.0),
+        outer_radius_nm: length(outer),
+        inner_radius_nm: length(radius - width / 2.0),
     }))
 }
 
@@ -495,7 +491,7 @@ fn bezier(points: [PcbPoint; 4], width: f64) -> Shape2d {
             control2_nm: pcb_point(points[2]),
             end_nm: pcb_point(points[3]),
         })],
-        width_nm: len(width),
+        width_nm: length(width),
         cap: PathCap::Round,
         join: PathJoin::Round,
     })

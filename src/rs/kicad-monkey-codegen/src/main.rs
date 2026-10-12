@@ -14,9 +14,7 @@ use typify::{TypeSpace, TypeSpaceSettings};
 mod config_projection;
 mod materialization_projection;
 
-use materialization_projection::{project_materialization_kinds, validate_materialization_kinds};
-
-const SCHEMAS: [(&str, &str); 42] = [
+const SCHEMAS: [(&str, &str); 40] = [
     ("BoardPlotDocument.json", "board_plot_document.rs"),
     ("BoardPlotRequest.json", "board_plot_request.rs"),
     ("BoardPlotResult.json", "board_plot_result.rs"),
@@ -84,11 +82,6 @@ const SCHEMAS: [(&str, &str); 42] = [
     ),
     ("NativeSvgRenderResult.json", "native_svg_render_result.rs"),
     ("NativeError.json", "native_error.rs"),
-    ("MaterializationRequest.json", "materialization_request.rs"),
-    (
-        "MaterializationDocument.json",
-        "materialization_document.rs",
-    ),
 ];
 
 const PLOTTER_OPERATION_KINDS: [(&str, &str, &str); 14] = [
@@ -477,13 +470,14 @@ fn main() -> Result<()> {
     let mut expected = BTreeMap::new();
     let mut modules = Vec::new();
 
-    for (schema_name, output_name) in SCHEMAS {
+    for (schema_name, output_name) in materialization_projection::with_schemas(SCHEMAS) {
         let schema_path = schema_root.join(schema_name);
         let mut schema: Value = serde_json::from_slice(
             &fs::read(&schema_path).with_context(|| format!("read {}", schema_path.display()))?,
         )?;
         let published_schema = schema.clone();
         validate_plotter_operation_kinds(schema_name, &schema)?;
+        materialization_projection::project_schema(schema_name, &mut schema)?;
         flatten_board_footprint_operation_extensions(schema_name, &mut schema)?;
         project_schematic_request_fields(schema_name, &mut schema)?;
         project_native_external_references(schema_name, &mut schema)?;
@@ -600,9 +594,6 @@ fn flatten_board_footprint_operation_extensions(
 }
 
 fn validate_plotter_operation_kinds(schema_name: &str, schema: &Value) -> Result<()> {
-    if schema_name == "MaterializationDocument.json" {
-        return validate_materialization_kinds(schema_name, schema);
-    }
     if !matches!(
         schema_name,
         "BoardPlotDocument.json"
@@ -771,7 +762,7 @@ fn project_generated_presence(
         projected = project_schematic_junction_color(projected)?;
         projected = project_schematic_segment_layers(projected)?;
     }
-    projected = project_materialization_kinds(schema_name, projected)?;
+    projected = materialization_projection::project_kinds(schema_name, projected)?;
     projected = project_schema_presence(schema_name, published_schema, projected)?;
     // Presence and deterministic-map substitutions can cross rustfmt's line-width
     // boundary, so normalize the fully projected source as the final step.
@@ -827,9 +818,7 @@ fn uses_strict_presence_projection(schema_name: &str) -> bool {
             | "SchematicPlotDocument.json"
             | "SchematicPlotRequest.json"
             | "SchematicPlotResult.json"
-            | "MaterializationRequest.json"
-            | "MaterializationDocument.json"
-    )
+    ) || materialization_projection::is_schema(schema_name)
 }
 
 fn project_schema_presence(schema_name: &str, schema: &Value, source: String) -> Result<String> {
@@ -1424,9 +1413,6 @@ fn promote_disjoint_record_unions(schema: &mut Value) {
         "/$defs/BoardPlotRecord",
         "/$defs/BoardFootprintOperation",
         "/$defs/SchematicPlotRecord",
-        "/$defs/Shape2d",
-        "/$defs/PathSegment",
-        "/$defs/MaterialOperation",
     ] {
         if let Some(record) = schema.pointer_mut(pointer).and_then(Value::as_object_mut)
             && let Some(members) = record.remove("anyOf")

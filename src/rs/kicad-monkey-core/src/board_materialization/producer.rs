@@ -4,7 +4,7 @@ use super::apertures::BoardMargins;
 use super::dielectric::dielectric_regions;
 use super::emit::{Emitter, Origin, source_uid};
 use super::flash::{FlashLayers, flash_layers, presentation_plot};
-use super::geometry::rotation_translation;
+use super::geometry::footprint_affine;
 use super::holes::{HoleSpec, pad_hole, via_holes};
 use super::layers::board_stack;
 use super::nets::{NetNames, net_table};
@@ -200,6 +200,17 @@ pub(crate) fn emit_board(
 ) -> Result<Emitted, MaterializationError> {
     let view =
         PcbView::parse_selected(source, Default::default(), selection()).map_err(parse_error)?;
+    emit_view(source, &view, products, operation_cap)
+}
+
+/// Emit `products` from an already parsed `view` of `source`. Correctness
+/// rule 1: a projected view and a full-model view give the same result.
+fn emit_view(
+    source: &str,
+    view: &PcbView<'_>,
+    products: &[MaterialProduct],
+    operation_cap: Option<usize>,
+) -> Result<Emitted, MaterializationError> {
     let copper = CopperStack::from_layers(&collect(view.layers())?);
     if copper.names.is_empty() {
         return Err(error("no_copper_layers", "board declares no copper layers"));
@@ -208,26 +219,26 @@ pub(crate) fn emit_board(
         cap: operation_cap,
         ..Emitter::default()
     };
-    warn_footprint_transforms(&view, &mut emitter);
-    let sources = load(&view, &mut emitter)?;
-    let nets = nets(&view, &sources)?;
+    warn_footprint_transforms(view, &mut emitter);
+    let sources = load(view, &mut emitter)?;
+    let nets = nets(view, &sources)?;
     let setup = view.setup().map_err(parse_error)?;
-    let stack = stack_of(&view, setup.as_ref(), &copper, &mut emitter)?;
+    let stack = stack_of(view, setup.as_ref(), &copper, &mut emitter)?;
     let wants = |product: MaterialProduct| products.contains(&product);
     let drawn =
         wants(MaterialProduct::Copper) || TECHNICAL_PRODUCTS.iter().any(|product| wants(*product));
     let graphics = if drawn {
-        source_graphics(&view)?
+        source_graphics(view)?
     } else {
         (Vec::new(), Vec::new())
     };
     // Text of every drawn product comes from one plot document.
     let text = drawn.then(|| Text {
-        context: text_context(source, &view, &graphics.0),
-        document: presentation_plot(source, &view),
+        context: text_context(source, view, &graphics.0),
+        document: presentation_plot(source, view),
     });
     if wants(MaterialProduct::Copper) {
-        emit_copper(source, &view, &sources, &copper, &mut emitter)?;
+        emit_copper(source, view, &sources, &copper, &mut emitter)?;
         let names = NetNames::new(&collect(view.nets())?, &nets);
         copper_graphics(
             &graphics.0,
@@ -241,7 +252,7 @@ pub(crate) fn emit_board(
             text.emit_copper(&copper, &mut emitter);
         }
     }
-    let regions = profile_regions(&view, &sources, products, &mut emitter)?;
+    let regions = profile_regions(view, &sources, products, &mut emitter)?;
     emit_drilled(&sources, &copper, &regions, &stack, products, &mut emitter);
     let board = Board {
         sources: &sources,
@@ -576,11 +587,7 @@ fn component(footprint: &PcbFootprint) -> Component {
         } else {
             BoardSide::Front
         },
-        affine: rotation_translation(
-            -footprint.angle.unwrap_or_default(),
-            footprint.at_x.unwrap_or_default(),
-            footprint.at_y.unwrap_or_default(),
-        ),
+        affine: footprint_affine(footprint),
         source_uid: source_uid(
             "footprint",
             footprint.uuid.as_deref(),
@@ -590,3 +597,7 @@ fn component(footprint: &PcbFootprint) -> Component {
         body_height_nm: None,
     }
 }
+
+#[cfg(test)]
+#[path = "rule_one_tests.rs"]
+mod rule_one_tests;
