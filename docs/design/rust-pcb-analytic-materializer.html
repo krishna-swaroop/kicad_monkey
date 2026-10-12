@@ -1,0 +1,444 @@
+<!doctype html>
+<html lang="en" data-doc-status="proposal">
+<head>
+  <meta charset="utf-8">
+  <title>Rust PCB analytic materializer</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <h1>Rust PCB analytic materializer</h1>
+
+  <p>Status: proposal. This work lives on the
+  <code>krishna-swaroop/kicad_monkey</code> fork, branch
+  <code>feat/rust-analytic-materializer</code>, until issue #20 closes its
+  contract upstream. Upstream has said it will bring a materializer into
+  kicad_monkey after building one in the altium_monkey Rust port. That
+  implementation is not public yet, so this work follows kicad_monkey's
+  current crate and contract layout. It also keeps every consumer behind
+  the packed encoding, so that adopting the upstream producer later changes
+  the producer and nothing else.</p>
+
+  <pre><code>KiCad source -&gt; resolve physical intent -&gt; analytic materialization -&gt; adapters</code></pre>
+
+  <p>The materializer is the single source of board geometry for two
+  consumers. The KiCad-Prism WebGPU viewer draws it. The prism-sim-studio
+  engines mesh it. Because both read the same operations through the same
+  stable operation indices and the same (slice, tile) chunks, simulation
+  results come back keyed to geometry the viewer already draws. The viewer
+  can then overlay those results on the board without a second geometry
+  pipeline.</p>
+
+  <h2>Layout in kicad_monkey</h2>
+  <p>The layout follows existing producers. <code>board_plotter_ir</code>
+  is a module in <code>kicad-monkey-core</code>. Its contract is authored
+  in TypeSpec and generated into <code>kicad-monkey-contracts</code>, and
+  its serializer, <code>kicad-monkey-svg</code>, is a thin separate crate.
+  The materializer is laid out the same way:</p>
+  <table>
+    <thead><tr><th>Piece</th><th>Location</th><th>Role</th></tr></thead>
+    <tbody>
+      <tr><td>Contract</td>
+        <td><code>src/tsp/kicad_monkey/materialization-a0.tsp</code>,
+          imported from <code>main.tsp</code></td>
+        <td>The scope, request, stack, nets, net classes, differential pairs,
+          shape union, surface and hole operations, components, binding
+          table, chunk index, and debug document. TypeSpec is the
+          authority.</td></tr>
+      <tr><td>Generated types</td>
+        <td><code>kicad-monkey-contracts/src/generated/</code> plus a
+          <code>materialization_contract.rs</code> validator, through the
+          existing <code>kicad-monkey-codegen</code> pipeline</td>
+        <td>Rust, Python, and TypeScript projections. These projections
+          are what the viewer and prism-sim-studio import.</td></tr>
+      <tr><td>Producer</td>
+        <td><code>kicad-monkey-core/src/board_materialization/</code>, a
+          sibling of <code>board_plotter_ir/</code></td>
+        <td>Resolves physical intent from <code>PcbView</code> and the
+          project file. Emits operations. Pushes the request's scope down
+          into <code>PcbSelection</code>. Stays dependency-free and
+          transport-neutral, as core requires.</td></tr>
+      <tr><td>Packed encoding</td>
+        <td>A new thin crate, <code>src/rs/kicad-monkey-materialization-pack</code></td>
+        <td>Writes and reads the columnar, chunked binary form. It depends
+          only on <code>kicad-monkey-contracts</code>, so the viewer through
+          WASM and the simulation engines can read bundles without the
+          KiCad parser. The pattern follows
+          <code>kicad-monkey-svg</code>.</td></tr>
+      <tr><td>Transport</td>
+        <td>A <code>kicad-monkey-native</code> operation, plus a WASM export
+          scoped to this one operation</td>
+        <td>Lets a Linux worker call the producer over stdin. Added after
+          native parity, per ADR-011.</td></tr>
+    </tbody>
+  </table>
+  <p>Rebase cost on the fork is limited to new files plus one module line
+    in core's <code>lib.rs</code>, one import in <code>main.tsp</code>, the
+    workspace member list, and regenerated projections. Generated files
+    are regenerated after a rebase, never merged by hand.</p>
+
+  <h2>Decision summary</h2>
+  <ul>
+    <li><strong>Vocabulary.</strong> The crate uses the issue #20 vocabulary
+      exactly: <code>disk_2d</code>, <code>rect_2d</code>,
+      <code>rounded_rect_2d</code>, <code>chamfered_rect_2d</code>,
+      <code>trapezoid_2d</code>, <code>capsule_2d</code>,
+      <code>annulus_2d</code>, <code>swept_path_2d</code> (line and arc
+      segments with width, cap, and join), and
+      <code>planar_region_2d</code>. Every operation also carries one
+      composed <code>Affine2D</code>, one material role, one slice, and a
+      resolved <code>net_key</code>. Holes are separate operations.</li>
+    <li><strong>Analytic only.</strong> The crate performs no Boolean
+      operations, no offsetting, and no tessellation. Material that is
+      removed (mask openings, dielectric drills, profile cutouts) is
+      written as <code>subtract</code> operations, and consumers resolve
+      them. The Geometer gate in
+      <a href="rust-geometer-bridge-disposition.html">the bridge-entry
+      disposition</a> therefore stays closed. Profile contour closure is
+      the one new close-to-format operation.</li>
+    <li><strong>Scope beyond the first slice of issue #20.</strong> The
+      binding table is required. The crate also covers:
+      <ul>
+        <li>differential pairs and net-class rules;</li>
+        <li>via protection, back-drill, and plating thickness;</li>
+        <li>dielectric regions and the board profile;</li>
+        <li>mask, paste, and silkscreen;</li>
+        <li>component bodies;</li>
+        <li>the full stack, with the material facts KiCad provides.</li>
+      </ul></li>
+    <li><strong>Encoding.</strong> Columnar 32-bit nanometre values in
+      KiCad's board frame (X right, Y down), chunked by (slice, tile) and
+      listed in a chunk index. The JSON and S-expression views are
+      deterministic debug output.</li>
+    <li><strong>Platforms.</strong> Linux x64 and arm64, macOS arm64 and
+      x64, and Windows x64. The producer and pack crates must also build for
+      <code>wasm32-unknown-unknown</code>. No native SDK is linked, and
+      <code>unsafe_code</code> stays forbidden.</li>
+  </ul>
+
+  <h2>One geometry for viewing and simulation</h2>
+  <p>These are the invariants that let the WebGPU viewer draw both the
+  board and simulation results from one materialization:</p>
+  <ol>
+    <li><strong>Same operations.</strong> The viewer's copper, mask, and
+      substrate draws, and every engine's mesh, come from the same
+      materialization. Each consumer only lowers it at its own tolerance.
+      No producer writes geometry that only the viewer or only the solver
+      can see.</li>
+    <li><strong>Same identity.</strong> Operation indices are stable across
+      the packed columns, the binding table, render feature IDs, and
+      engine element-to-operation maps. A pick in the viewer and a result
+      row in a solver name the same operation.</li>
+    <li><strong>Same chunks.</strong> Engines report spatial results per
+      (slice, tile), using the materialization's tile grid. The viewer
+      already loads, budgets, and evicts per slice and tile, so result
+      overlays follow the same rules: inner layers load on demand, budgets
+      are counted, and data is evicted together with the geometry tile it
+      belongs to.</li>
+  </ol>
+  <p>Simulation results therefore come back in two forms. Both forms are
+  defined in prism-sim-studio's result contract.</p>
+  <table>
+    <thead><tr><th>Form</th><th>Content</th><th>Viewer use</th></tr></thead>
+    <tbody>
+      <tr><td>Per-operation values</td>
+        <td>A value per operation index for a named quantity. Examples:
+          current through each via, temperature of each component body,
+          maximum current density per track.</td>
+        <td>A lookup buffer indexed by the feature ID the viewer already
+          writes per vertex and reads back on pick. It colors features
+          through a colormap and shows the exact value on hover.</td></tr>
+      <tr><td>Field tiles</td>
+        <td>A scalar raster per (slice, tile) in board nanometres, with
+          resolution, value range, and units. Examples: voltage, current
+          density, temperature.</td>
+        <td>Sampled in the fragment shader at the fragment's board
+          position, masked by the geometry already being drawn. This works
+          the same whether the geometry is a mesh today or an SDF
+          instance after the analytic spike.</td></tr>
+    </tbody>
+  </table>
+  <p>The viewer's geometry, tiling, culling, LOD, picking, and budget code
+  is reused as is. The overlay adds one shading mode: a colormap, a
+  per-feature value buffer, and a field-tile texture binding. It is added
+  as a new pipeline family, so the pinned base shaders stay untouched.
+  Engines may still write their native meshes as debug artifacts. They are
+  not the display path.</p>
+
+  <h2>What core already provides</h2>
+  <table>
+    <thead><tr><th>Need</th><th>Core surface</th><th>Materializer work</th></tr></thead>
+    <tbody>
+      <tr><td>Tracks, arcs, vias</td><td><code>PcbView</code> routing families
+        and the via decoder (kind, tenting, covering, plugging, capping,
+        filling)</td><td>Tracks and arcs become <code>swept_path_2d</code>,
+        vias become lands, and via protection goes on hole
+        operations.</td></tr>
+      <tr><td>Pads</td><td>Typed <code>PcbPad</code> (shape, round-rect,
+        chamfer, trapezoid delta, custom primitives, margins, layer removal,
+        UUID, parent footprint) and resolved padstacks</td><td>Analytic shape
+        mapping and one composed affine. Custom pads become
+        <code>planar_region_2d</code>.</td></tr>
+      <tr><td>Holes</td><td><code>holes()</code> with plating and spans, plus
+        back-drill, tertiary-drill, and post-machining records</td><td>Hole
+        operations with start and end slices, back-drill, and
+        <code>net_key</code>.</td></tr>
+      <tr><td>Zones</td><td>Authored outlines and stored fills. Core does no
+        refill.</td><td>Stored fills become <code>planar_region_2d</code>.
+        Callers refill with <code>kicad-cli</code> beforehand.</td></tr>
+      <tr><td>Stack</td><td><code>PcbSetup</code> and
+        <code>PcbStackup</code></td><td>An ordered slice list with canonical
+        keys. Unknown values stay explicit.</td></tr>
+      <tr><td>Profile</td><td><code>profile_primitives()</code>, with no
+        closure</td><td>Contour closure into an outer profile and cutouts
+        (new).</td></tr>
+      <tr><td>Placement</td><td><code>footprint_transforms()</code></td>
+        <td>Composed affines and component records.</td></tr>
+      <tr><td>Selective reads</td><td><code>PcbSelection</code></td>
+        <td>Request-scope pushdown.</td></tr>
+      <tr><td>Net classes</td><td>The project reader (<code>.kicad_pro</code>
+        net settings)</td><td>Class resolution, rules, and differential
+        pairing.</td></tr>
+      <tr><td>Logical identity</td><td><code>design_json</code></td>
+        <td>None. The bundle builder stores it, and the binding table joins
+        to it on <code>refdes</code> plus <code>pad_number</code>.</td></tr>
+    </tbody>
+  </table>
+
+  <h2>Contract: kicad_monkey.materialization.a0</h2>
+  <ul>
+    <li><strong>Scope:</strong> the requested products, slices, nets, and
+      region, the tile size, and whether the result is complete.</li>
+    <li><strong>Coordinate system:</strong> nanometres, with X pointing right
+      on the board and Y pointing down. Z is derived from the slice
+      order.</li>
+    <li><strong>Stack:</strong> conductor, dielectric, solder mask, paste,
+      and silkscreen slices. Each slice has a key, role, order, optional
+      thickness, material name, &epsilon;r, and tan&delta;, plus mask data
+      and the finish.</li>
+    <li><strong>Nets:</strong> <code>net_key</code>, name, and class. Net
+      classes carry width, clearance, differential-pair width and gap, and
+      via sizes. Differential pairs name a positive and a negative
+      <code>net_key</code>.</li>
+    <li><strong>Surface operations:</strong> <code>index</code>,
+      <code>action</code>, <code>material</code>, <code>slice_key</code>,
+      <code>net_key</code>, shape, <code>affine</code>, and the bounds
+      after the affine is applied.</li>
+    <li><strong>Hole operations:</strong> <code>index</code>, shape,
+      <code>affine</code>, <code>plating</code>, start and end slices,
+      <code>net_key</code>, plating thickness, protection for each side,
+      back-drill, and bounds.</li>
+    <li><strong>Components:</strong> reference, footprint, side, affine,
+      body box, and body height when known.</li>
+    <li><strong>Binding table (required, separate):</strong> for each
+      operation, the <code>source_uid</code>, <code>source_kind</code>,
+      <code>refdes</code>, <code>pad_number</code>, and
+      <code>net_key</code>.</li>
+    <li><strong>Chunk index:</strong> for each (slice, tile), the bounds,
+      the <code>net_keys</code>, the byte size, and the range of operation
+      indices.</li>
+  </ul>
+  <h3>Correctness rules</h3>
+  <ol>
+    <li>Projection input and full-model input produce identical
+      results.</li>
+    <li>A selective result equals the complete result filtered the same
+      way.</li>
+    <li>Output is byte-deterministic for the same source and producer
+      version.</li>
+    <li>Operations on different nets are never merged.</li>
+    <li>Every operation has a slice. Every conductive operation has a
+      <code>net_key</code>; copper with no net uses the empty net.</li>
+  </ol>
+
+  <h2>Products</h2>
+  <table>
+    <thead><tr><th>Product</th><th>Operations</th></tr></thead>
+    <tbody>
+      <tr><td>copper</td><td>Tracks and arcs as <code>swept_path_2d</code>.
+        Pad lands as their analytic shape. Via lands as
+        <code>disk_2d</code>. Stored fills as
+        <code>planar_region_2d</code>.</td></tr>
+      <tr><td>holes</td><td>Round holes as <code>disk_2d</code> and slots as
+        <code>capsule_2d</code>, each with plating, span, protection, and
+        back-drill.</td></tr>
+      <tr><td>dielectric</td><td>For each dielectric slice, the closed board
+        profile is added, and its cutouts and every hole whose span crosses
+        the slice are subtracted. The profile has no product of its own, so
+        every operation belongs to exactly one product.</td></tr>
+      <tr><td>solder_mask</td><td>For each side, the profile is added. Pad
+        openings grown by the resolved margin, untented via openings, and
+        mask-layer graphics and zones are subtracted.</td></tr>
+      <tr><td>paste</td><td>Paste-layer pads after the resolved margin and
+        ratio are applied, plus paste-layer graphics.</td></tr>
+      <tr><td>silkscreen</td><td>Graphics as paths and regions. Stroke text
+        uses core's Newstroke geometry, and outline text uses render
+        caches.</td></tr>
+      <tr><td>components</td><td>Records only. 3D models stay viewer
+        inputs.</td></tr>
+    </tbody>
+  </table>
+
+  <h2>Packed encoding</h2>
+  <ul>
+    <li><strong>Columns.</strong> Each shape kind has fixed-width columns
+      of 32-bit signed nanometre parameters, plus a shared affine column.
+      Rotation and scale are stored as <code>f64</code> and translation as
+      integer nanometres. Renderers convert these to <code>f32</code>
+      relative to each tile's origin.</li>
+    <li><strong>Chunks.</strong> Data is chunked by (slice, tile), and the
+      tile size is a request parameter. An operation belongs to the tile
+      that contains the centre of its bounds. A chunk's bounds cover every
+      operation it holds.</li>
+    <li><strong>Header.</strong> The header holds the schema version,
+      producer version, source hash, scope, and chunk directory. Readers
+      seek straight to the chunks they need.</li>
+    <li><strong>Byte layout.</strong> The byte layout is specified in this
+      document, because TypeSpec cannot express a binary layout. TypeSpec
+      governs the header, the chunk index, and the debug document.</li>
+  </ul>
+
+  <h2>Slice 0 contract decisions</h2>
+  <ul>
+    <li><strong>Decoding.</strong> The workspace builds serde_json with
+      <code>arbitrary_precision</code>. With that feature, numbers inside
+      untagged unions do not decode straight from text. Documents are
+      therefore decoded through
+      <code>materialization_contract::decode_materialization_document_a0</code>,
+      which parses to a <code>Value</code> first and then runs the semantic
+      validator. The pack header reader does the same.</li>
+    <li><strong>Exact kinds.</strong> Every shape, segment, and operation
+      checks its literal <code>kind</code> during decoding. The codegen
+      injects these checks from
+      <code>kicad-monkey-codegen/src/materialization_projection.rs</code>.</li>
+    <li><strong>Hole chunks.</strong> A hole is chunked on its start slice.
+      A slice filter keeps a hole when the hole's span crosses any selected
+      slice.</li>
+    <li><strong>Empty filters.</strong> An empty <code>slice_keys</code> or
+      <code>net_keys</code> list means all slices or all nets. Generated
+      types cannot tell an absent list from an empty one.</li>
+    <li><strong>Chunk contents.</strong> Chunk bounds are the union of the
+      bounds of the operations in the chunk. Chunk net keys are the sorted,
+      distinct nets of those operations. The producer and
+      <code>filter_document</code> both build chunks with
+      <code>chunk_operations</code>, so rule 2 compares like with like.</li>
+    <li><strong>S-expression view.</strong> It is a debug view generated from
+      the JSON, with sorted keys. It is not parsed back.</li>
+  </ul>
+
+  <h2>Porting from KiCad-Prism's analytic producer</h2>
+  <p><code>prism-kicad-native</code> (<code>materialize.rs</code>,
+  <code>analytic_contract.rs</code>) already emits analytic copper and
+  drills from <code>kicad-monkey-core</code> at the revision this branch
+  starts from. It is the starting point for slice 1. These are the
+  changes required to meet the contract:</p>
+  <table>
+    <thead><tr><th>Prism v2</th><th>Materialization a0</th></tr></thead>
+    <tbody>
+      <tr><td><code>CircularSweep</code>, plus <code>SweptPath</code> as a
+        polyline with a radius</td><td>One <code>swept_path_2d</code> with
+        line and arc segments, width, cap, and join</td></tr>
+      <tr><td>Rectangles as a <code>RoundedRect</code> with zero
+        radius</td><td>An explicit <code>rect_2d</code></td></tr>
+      <tr><td>One operation listing several layers</td><td>One operation for
+        each slice. Through-pads and vias expand to one land operation per
+        conductor slice.</td></tr>
+      <tr><td><code>component_ref</code> and <code>pad_number</code> stored
+        inline on each operation</td><td>A separate binding table keyed by
+        operation index</td></tr>
+      <tr><td><code>Drill</code> with a list of layers</td><td>A hole
+        operation with start and end slices, protection, back-drill, and
+        plating thickness</td></tr>
+      <tr><td><code>anyhow</code> errors and file I/O inside the
+        producer</td><td>Structured core diagnostics and byte input. Core
+        does not depend on ambient filesystem state.</td></tr>
+    </tbody>
+  </table>
+  <p><strong>Licensing:</strong> KiCad-Prism is licensed under Apache-2.0,
+  and kicad_monkey is licensed under MIT. Every commit to the ported files
+  has a single author, the same person who maintains this fork.
+  Relicensing the ported code under MIT needs that author's approval, and
+  the approval of their employer where required. Recorded 2026-10-12: the
+  author approved relicensing the ported files under MIT, and the producer
+  is a personal project.</p>
+
+  <h2>Delivery slices</h2>
+  <table>
+    <thead><tr><th>Slice</th><th>Content</th><th>Exit evidence</th></tr></thead>
+    <tbody>
+      <tr><td>0. Contract and scaffold</td>
+        <td><code>materialization-a0.tsp</code> and the generated
+          contracts. An empty <code>board_materialization</code> module with
+          the request and result types. The pack crate skeleton. Debug JSON
+          and S-expression views. An equivalence harness.</td>
+        <td>TypeSpec and generation checks pass. The issue #20 worked
+          example round-trips through the debug views. Workspace Clippy and
+          the hygiene ratchet stay clean.</td></tr>
+      <tr><td>1. Copper, holes, nets, binding</td>
+        <td>A port of the Prism producer with the changes listed above,
+          plus the binding table.</td>
+        <td>Lowered copper matches the existing polygonization on the
+          mandatory corpus boards within 1 nm per vertex. Rules 1, 2, and 4
+          hold on <code>4-ch-backplane</code>,
+          <code>speedy_processing_module</code>,
+          <code>charge_indicator</code>, and <code>taillight</code>. The
+          binding table covers every pad and via.</td></tr>
+      <tr><td>2. Stack, profile, dielectric, hole detail</td>
+        <td>The slice list and contour closure. Dielectric regions. Via
+          protection, back-drill, and plating thickness.</td>
+        <td>Profile area and cutout count match <code>kicad-cli</code>
+          Edge.Cuts output. The stack matches core's stackup records.
+          Durable vectors exist for blind, buried, micro, and back-drilled
+          spans.</td></tr>
+      <tr><td>3. Mask, paste, silkscreen</td>
+        <td>Margin precedence across pad, footprint, and board. Per-via
+          tenting, with the board default as fallback.</td>
+        <td>Lowered mask and paste match <code>kicad-cli</code> Gerber
+          output within a stated tolerance.</td></tr>
+      <tr><td>4. Net classes, differential pairs, components</td>
+        <td>Project class resolution, pairing, and component
+          records.</td>
+        <td>Results match KiCad on the corpus and on suffix-form
+          vectors.</td></tr>
+      <tr><td>5. Packed encoding and pushdown</td>
+        <td>The columnar writer and reader, the chunk index, and scope
+          pushdown into <code>PcbSelection</code>.</td>
+        <td>Rule 3 holds. Selective reads decode only the selected
+          families. JTYU-OBC time and memory are compared with the Python
+          prototype's 6.98 s and 350 MB.</td></tr>
+      <tr><td>6. Consumers and platforms</td>
+        <td>The KiCad-Prism viewer draws from the pack; this is the WebGPU
+          analytic spike. The prism-sim-studio bundle builder reads it. CI
+          runs on every listed target, plus a <code>wasm32</code> build
+          check.</td>
+        <td>The viewer holds its pixel-diff and memory baselines. Sim
+          bundles pass their cross-checks. One per-operation overlay and one
+          field-tile overlay render on a corpus board from a synthetic
+          result.</td></tr>
+    </tbody>
+  </table>
+
+  <h2>Upstream path</h2>
+  <ul>
+    <li>Each slice is reported on issue #20, along with the layout used
+      here. Upstream is also asked whether the altium_monkey Rust
+      materializer uses the same vocabulary and layout.</li>
+    <li>When the upstream producer lands, it either replaces the
+      <code>board_materialization</code> module or sits behind it.
+      Consumers depend only on the contract and the pack crate.</li>
+    <li>The branch is rebased on <code>upstream/main</code> before each
+      slice. It starts at <code>bc6796c</code>, the revision KiCad-Prism
+      pins.</li>
+  </ul>
+
+  <h2>Out of scope</h2>
+  <ul>
+    <li><strong>Zone refill:</strong> done before materialization, through
+      <code>kicad-cli</code>.</li>
+    <li><strong>Boolean resolution, offsetting, tessellation, and
+      meshing:</strong> done by consumers, and still governed by the
+      Geometer gate.</li>
+    <li><strong>Data from other sources:</strong> 3D models, simulation
+      material properties beyond KiCad's stack, and device models.</li>
+  </ul>
+</body>
+</html>

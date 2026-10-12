@@ -1565,6 +1565,295 @@ NativeSvgPositiveSafeInteger = Annotated[int, Meta(ge=1, le=9007199254740991)]
 NativeErrorKind = Literal["request", "path", "io", "resource_limit", "core"]
 
 
+MaterialProduct = Literal["copper", "holes", "dielectric", "solder_mask", "paste", "silkscreen", "components"]
+
+
+class NmBounds(Struct, forbid_unknown_fields=True, frozen=True):
+    min_x_nm: Nm
+    min_y_nm: Nm
+    max_x_nm: Nm
+    max_y_nm: Nm
+
+
+NonNegativeNm = Annotated[int, Meta(ge=0, le=2147483647)]
+
+
+Nm = Annotated[int, Meta(ge=-2147483648, le=2147483647)]
+
+
+class MaterializationProducer(Struct, forbid_unknown_fields=True, frozen=True):
+    name: str
+    version: str
+
+
+class MaterializationSource(Struct, forbid_unknown_fields=True, frozen=True):
+    sha256: str
+    source_bytes: str
+
+
+class MaterializationCoordinateSystem(Struct, forbid_unknown_fields=True, frozen=True):
+    unit: Literal["nm"]
+    x_axis: Literal["board_right"]
+    y_axis: Literal["board_down"]
+
+
+class MaterializationScope(Struct, forbid_unknown_fields=True, frozen=True):
+    products: list[MaterialProduct]
+    tile_size_nm: NonNegativeNm
+    complete: bool
+    slice_keys: list[str] | UnsetType = field(default=UNSET)
+    net_keys: list[str] | UnsetType = field(default=UNSET)
+    region: NmBounds | UnsetType = field(default=UNSET)
+
+
+class Stack(Struct, forbid_unknown_fields=True, frozen=True):
+    slices: list[StackSlice]
+    board_thickness_nm: NonNegativeNm | UnsetType = field(default=UNSET)
+    copper_finish: str | UnsetType = field(default=UNSET)
+
+
+class Net(Struct, forbid_unknown_fields=True, frozen=True):
+    key: str
+    name: str
+    net_class: str | UnsetType = field(default=UNSET)
+
+
+class NetClass(Struct, forbid_unknown_fields=True, frozen=True):
+    name: str
+    track_width_nm: NonNegativeNm | UnsetType = field(default=UNSET)
+    clearance_nm: NonNegativeNm | UnsetType = field(default=UNSET)
+    diff_pair_width_nm: NonNegativeNm | UnsetType = field(default=UNSET)
+    diff_pair_gap_nm: NonNegativeNm | UnsetType = field(default=UNSET)
+    via_diameter_nm: NonNegativeNm | UnsetType = field(default=UNSET)
+    via_drill_nm: NonNegativeNm | UnsetType = field(default=UNSET)
+
+
+class DiffPair(Struct, forbid_unknown_fields=True, frozen=True):
+    base_name: str
+    positive_net_key: str
+    negative_net_key: str
+
+
+class Component(Struct, forbid_unknown_fields=True, frozen=True):
+    refdes: str
+    footprint: str
+    side: BoardSide
+    affine: Affine2D
+    source_uid: str
+    body_bounds: NmBounds | UnsetType = field(default=UNSET)
+    body_height_nm: NonNegativeNm | UnsetType = field(default=UNSET)
+
+
+MaterialOperation = Union["SurfaceOperation", "HoleOperation"]
+
+
+class BindingEntry(Struct, forbid_unknown_fields=True, frozen=True):
+    operation_index: Annotated[int, Meta(ge=0, le=4294967295)]
+    source_kind: BindingSourceKind
+    source_uid: str
+    refdes: str | UnsetType = field(default=UNSET)
+    pad_number: str | UnsetType = field(default=UNSET)
+    net_key: str | UnsetType = field(default=UNSET)
+
+
+class ChunkEntry(Struct, forbid_unknown_fields=True, frozen=True):
+    slice_key: str
+    tile_x: Annotated[int, Meta(ge=-2147483648, le=2147483647)]
+    tile_y: Annotated[int, Meta(ge=-2147483648, le=2147483647)]
+    bounds: NmBounds
+    net_keys: list[str]
+    first_operation_index: Annotated[int, Meta(ge=0, le=4294967295)]
+    operation_count: Annotated[int, Meta(ge=0, le=4294967295)]
+
+
+class MaterializationDiagnostic(Struct, forbid_unknown_fields=True, frozen=True):
+    severity: DiagnosticSeverity
+    code: str
+    message: str
+    source_uid: str | UnsetType = field(default=UNSET)
+
+
+class StackSlice(Struct, forbid_unknown_fields=True, frozen=True):
+    key: str
+    role: SliceRole
+    order: Annotated[int, Meta(ge=0, le=4294967295)]
+    kicad_layer: str | UnsetType = field(default=UNSET)
+    side: BoardSide | UnsetType = field(default=UNSET)
+    thickness_nm: NonNegativeNm | UnsetType = field(default=UNSET)
+    material_name: str | UnsetType = field(default=UNSET)
+    relative_permittivity: float | UnsetType = field(default=UNSET)
+    loss_tangent: float | UnsetType = field(default=UNSET)
+
+
+BoardSide = Literal["front", "back"]
+
+
+class Affine2D(Struct, forbid_unknown_fields=True, frozen=True):
+    m11: float
+    m12: float
+    m21: float
+    m22: float
+    tx_nm: Nm
+    ty_nm: Nm
+
+
+class SurfaceOperation(Struct, forbid_unknown_fields=True, frozen=True, tag="surface", tag_field="kind"):
+    index: Annotated[int, Meta(ge=0, le=4294967295)]
+    action: MaterialAction
+    material: SurfaceMaterial
+    slice_key: str
+    shape: Shape2d
+    affine: Affine2D
+    bounds: NmBounds
+    net_key: str | UnsetType = field(default=UNSET)
+
+
+class HoleOperation(Struct, forbid_unknown_fields=True, frozen=True, tag="hole", tag_field="kind"):
+    index: Annotated[int, Meta(ge=0, le=4294967295)]
+    shape: Shape2d
+    affine: Affine2D
+    plating: HolePlating
+    start_slice_key: str
+    end_slice_key: str
+    backdrills: list[Backdrill]
+    bounds: NmBounds
+    net_key: str | UnsetType = field(default=UNSET)
+    plating_thickness_nm: NonNegativeNm | UnsetType = field(default=UNSET)
+    protection: HoleProtection | UnsetType = field(default=UNSET)
+
+
+BindingSourceKind = Literal["track", "track_arc", "via", "pad", "zone_fill", "board_graphic", "footprint_graphic", "board_text", "footprint_text", "profile", "derived"]
+
+
+DiagnosticSeverity = Literal["info", "warning", "error"]
+
+
+SliceRole = Literal["conductor", "dielectric", "solder_mask", "paste", "silkscreen"]
+
+
+MaterialAction = Literal["add", "subtract"]
+
+
+SurfaceMaterial = Literal["copper", "dielectric", "solder_mask", "paste", "silkscreen"]
+
+
+Shape2d = Union["Disk2d", "Rect2d", "RoundedRect2d", "ChamferedRect2d", "Trapezoid2d", "Capsule2d", "Annulus2d", "SweptPath2d", "PlanarRegion2d"]
+
+
+HolePlating = Literal["plated", "unplated"]
+
+
+class HoleProtection(Struct, forbid_unknown_fields=True, frozen=True):
+    front: SideProtection
+    back: SideProtection
+    filled: ProtectionState
+    capped: ProtectionState
+
+
+class Backdrill(Struct, forbid_unknown_fields=True, frozen=True):
+    side: BoardSide
+    diameter_nm: NonNegativeNm | UnsetType = field(default=UNSET)
+    until_slice_key: str | UnsetType = field(default=UNSET)
+
+
+class Disk2d(Struct, forbid_unknown_fields=True, frozen=True, tag="disk_2d", tag_field="kind"):
+    center_nm: NmPoint
+    radius_nm: NonNegativeNm
+
+
+class Rect2d(Struct, forbid_unknown_fields=True, frozen=True, tag="rect_2d", tag_field="kind"):
+    center_nm: NmPoint
+    width_nm: NonNegativeNm
+    height_nm: NonNegativeNm
+
+
+class RoundedRect2d(Struct, forbid_unknown_fields=True, frozen=True, tag="rounded_rect_2d", tag_field="kind"):
+    center_nm: NmPoint
+    width_nm: NonNegativeNm
+    height_nm: NonNegativeNm
+    radius_nm: NonNegativeNm
+
+
+class ChamferedRect2d(Struct, forbid_unknown_fields=True, frozen=True, tag="chamfered_rect_2d", tag_field="kind"):
+    center_nm: NmPoint
+    width_nm: NonNegativeNm
+    height_nm: NonNegativeNm
+    chamfer_nm: NonNegativeNm
+    chamfered_corners: list[RectCorner]
+    radius_nm: NonNegativeNm
+
+
+class Trapezoid2d(Struct, forbid_unknown_fields=True, frozen=True, tag="trapezoid_2d", tag_field="kind"):
+    center_nm: NmPoint
+    width_nm: NonNegativeNm
+    height_nm: NonNegativeNm
+    delta_x_nm: Nm
+    delta_y_nm: Nm
+
+
+class Capsule2d(Struct, forbid_unknown_fields=True, frozen=True, tag="capsule_2d", tag_field="kind"):
+    start_nm: NmPoint
+    end_nm: NmPoint
+    radius_nm: NonNegativeNm
+
+
+class Annulus2d(Struct, forbid_unknown_fields=True, frozen=True, tag="annulus_2d", tag_field="kind"):
+    center_nm: NmPoint
+    outer_radius_nm: NonNegativeNm
+    inner_radius_nm: NonNegativeNm
+
+
+class SweptPath2d(Struct, forbid_unknown_fields=True, frozen=True, tag="swept_path_2d", tag_field="kind"):
+    start_nm: NmPoint
+    segments: list[PathSegment]
+    width_nm: NonNegativeNm
+    cap: PathCap
+    join: PathJoin
+
+
+class PlanarRegion2d(Struct, forbid_unknown_fields=True, frozen=True, tag="planar_region_2d", tag_field="kind"):
+    outer: Contour
+    holes: list[Contour]
+
+
+class SideProtection(Struct, forbid_unknown_fields=True, frozen=True):
+    tented: ProtectionState
+    covered: ProtectionState
+    plugged: ProtectionState
+
+
+ProtectionState = Literal["yes", "no", "unspecified"]
+
+
+NmPoint = Annotated[list[Nm], Meta(min_length=2, max_length=2)]
+
+
+RectCorner = Literal["top_left", "top_right", "bottom_left", "bottom_right"]
+
+
+PathSegment = Union["LineSegment", "ArcSegment"]
+
+
+PathCap = Literal["round", "flat"]
+
+
+PathJoin = Literal["round", "miter"]
+
+
+class Contour(Struct, forbid_unknown_fields=True, frozen=True):
+    start_nm: NmPoint
+    segments: list[PathSegment]
+
+
+class LineSegment(Struct, forbid_unknown_fields=True, frozen=True, tag="line", tag_field="kind"):
+    end_nm: NmPoint
+
+
+class ArcSegment(Struct, forbid_unknown_fields=True, frozen=True, tag="arc", tag_field="kind"):
+    mid_nm: NmPoint
+    end_nm: NmPoint
+
+
 class SExpressionBuildRequestA0(Struct, forbid_unknown_fields=True, frozen=True):
     type_: Literal["kicad_monkey.sexpr_build.request"] = field(name="type")
     version: Literal["a0"]
@@ -2052,6 +2341,38 @@ class NativeErrorA0(Struct, forbid_unknown_fields=True, frozen=True):
     version: Literal["a0"]
     kind: NativeErrorKind
     message: str
+
+
+class MaterializationRequestA0(Struct, forbid_unknown_fields=True, frozen=True):
+    type_: Literal["kicad_monkey.materialization.request"] = field(name="type")
+    version: Literal["a0"]
+    products: list[MaterialProduct]
+    tile_size_nm: NonNegativeNm
+    max_source_bytes: str
+    max_operations: Annotated[int, Meta(ge=0, le=4294967295)]
+    max_points: Annotated[int, Meta(ge=0, le=4294967295)]
+    slice_keys: list[str] | UnsetType = field(default=UNSET)
+    net_keys: list[str] | UnsetType = field(default=UNSET)
+    region: NmBounds | UnsetType = field(default=UNSET)
+
+
+class MaterializationDocumentA0(Struct, forbid_unknown_fields=True, frozen=True):
+    schema: Literal["kicad_monkey.materialization.a0"]
+    type_: Literal["kicad_monkey.materialization.document"] = field(name="type")
+    version: Literal["a0"]
+    producer: MaterializationProducer
+    source: MaterializationSource
+    coordinate_system: MaterializationCoordinateSystem
+    scope: MaterializationScope
+    stack: Stack
+    nets: list[Net]
+    net_classes: list[NetClass]
+    diff_pairs: list[DiffPair]
+    components: list[Component]
+    operations: list[MaterialOperation]
+    binding: list[BindingEntry]
+    chunks: list[ChunkEntry]
+    diagnostics: list[MaterializationDiagnostic]
 
 
 decode_sexpr_build_request_a0 = msgspec.json.Decoder(SExpressionBuildRequestA0).decode
@@ -3691,6 +4012,8 @@ def validate_native_svg_render_result_a0(value: NativeSVGRenderResultA0) -> None
     if value.svg_sha256 != hashlib.sha256(value.svg_utf8.encode('utf-8')).hexdigest():
         raise msgspec.ValidationError("hash_mismatch at $.svg_sha256")
 decode_native_error_a0 = msgspec.json.Decoder(NativeErrorA0).decode
+decode_materialization_request_a0 = msgspec.json.Decoder(MaterializationRequestA0).decode
+decode_materialization_document_a0 = msgspec.json.Decoder(MaterializationDocumentA0).decode
 
 
 __all__ = (
@@ -3878,6 +4201,56 @@ __all__ = (
     "NativeSchematicSvgDocument",
     "NativeSvgPositiveSafeInteger",
     "NativeErrorKind",
+    "MaterialProduct",
+    "NmBounds",
+    "NonNegativeNm",
+    "Nm",
+    "MaterializationProducer",
+    "MaterializationSource",
+    "MaterializationCoordinateSystem",
+    "MaterializationScope",
+    "Stack",
+    "Net",
+    "NetClass",
+    "DiffPair",
+    "Component",
+    "MaterialOperation",
+    "BindingEntry",
+    "ChunkEntry",
+    "MaterializationDiagnostic",
+    "StackSlice",
+    "BoardSide",
+    "Affine2D",
+    "SurfaceOperation",
+    "HoleOperation",
+    "BindingSourceKind",
+    "DiagnosticSeverity",
+    "SliceRole",
+    "MaterialAction",
+    "SurfaceMaterial",
+    "Shape2d",
+    "HolePlating",
+    "HoleProtection",
+    "Backdrill",
+    "Disk2d",
+    "Rect2d",
+    "RoundedRect2d",
+    "ChamferedRect2d",
+    "Trapezoid2d",
+    "Capsule2d",
+    "Annulus2d",
+    "SweptPath2d",
+    "PlanarRegion2d",
+    "SideProtection",
+    "ProtectionState",
+    "NmPoint",
+    "RectCorner",
+    "PathSegment",
+    "PathCap",
+    "PathJoin",
+    "Contour",
+    "LineSegment",
+    "ArcSegment",
     "SExpressionBuildRequestA0",
     "SExpressionBuildResultA0",
     "SExpressionScanRequestA0",
@@ -3918,6 +4291,8 @@ __all__ = (
     "NativeSVGRenderRequestA0",
     "NativeSVGRenderResultA0",
     "NativeErrorA0",
+    "MaterializationRequestA0",
+    "MaterializationDocumentA0",
     "decode_sexpr_build_request_a0",
     "decode_sexpr_build_result_a0",
     "decode_sexpr_scan_request_a0",
@@ -3958,6 +4333,8 @@ __all__ = (
     "decode_native_svg_render_request_a0",
     "decode_native_svg_render_result_a0",
     "decode_native_error_a0",
+    "decode_materialization_request_a0",
+    "decode_materialization_document_a0",
     "validate_footprint_plot_document_a0",
     "validate_board_plot_document_a0",
     "resolve_font_selection_a0",

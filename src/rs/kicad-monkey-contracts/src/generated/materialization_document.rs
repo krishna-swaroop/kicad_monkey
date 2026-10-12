@@ -1,0 +1,3055 @@
+/// Error types.
+pub mod error {
+    /// Error from a `TryFrom` or `FromStr` implementation.
+    pub struct ConversionError(::std::borrow::Cow<'static, str>);
+    impl ::std::error::Error for ConversionError {}
+    impl ::std::fmt::Display for ConversionError {
+        fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> Result<(), ::std::fmt::Error> {
+            ::std::fmt::Display::fmt(&self.0, f)
+        }
+    }
+    impl ::std::fmt::Debug for ConversionError {
+        fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> Result<(), ::std::fmt::Error> {
+            ::std::fmt::Debug::fmt(&self.0, f)
+        }
+    }
+    impl From<&'static str> for ConversionError {
+        fn from(value: &'static str) -> Self {
+            Self(value.into())
+        }
+    }
+    impl From<String> for ConversionError {
+        fn from(value: String) -> Self {
+            Self(value.into())
+        }
+    }
+}
+/**One fully composed local-to-board transform. A shape's local coordinates
+map to board coordinates as x' = m11*x + m12*y + tx_nm and
+y' = m21*x + m22*y + ty_nm. Reflection, rotation, and non-uniform scale are
+ordinary cases of the same matrix.*/
+///
+/// <details><summary>JSON schema</summary>
+///
+/// ```json
+///{
+///  "description": "One fully composed local-to-board transform. A shape's local coordinates\nmap to board coordinates as x' = m11*x + m12*y + tx_nm and\ny' = m21*x + m22*y + ty_nm. Reflection, rotation, and non-uniform scale are\nordinary cases of the same matrix.",
+///  "type": "object",
+///  "required": [
+///    "m11",
+///    "m12",
+///    "m21",
+///    "m22",
+///    "tx_nm",
+///    "ty_nm"
+///  ],
+///  "properties": {
+///    "m11": {
+///      "type": "number"
+///    },
+///    "m12": {
+///      "type": "number"
+///    },
+///    "m21": {
+///      "type": "number"
+///    },
+///    "m22": {
+///      "type": "number"
+///    },
+///    "tx_nm": {
+///      "$ref": "#/$defs/Nm"
+///    },
+///    "ty_nm": {
+///      "$ref": "#/$defs/Nm"
+///    }
+///  },
+///  "additionalProperties": false
+///}
+/// ```
+/// </details>
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct Affine2D {
+    pub m11: f64,
+    pub m12: f64,
+    pub m21: f64,
+    pub m22: f64,
+    pub tx_nm: Nm,
+    pub ty_nm: Nm,
+}
+///`Annulus2d`
+///
+/// <details><summary>JSON schema</summary>
+///
+/// ```json
+///{
+///  "type": "object",
+///  "required": [
+///    "center_nm",
+///    "inner_radius_nm",
+///    "kind",
+///    "outer_radius_nm"
+///  ],
+///  "properties": {
+///    "center_nm": {
+///      "$ref": "#/$defs/NmPoint"
+///    },
+///    "inner_radius_nm": {
+///      "$ref": "#/$defs/NonNegativeNm"
+///    },
+///    "kind": {
+///      "type": "string",
+///      "const": "annulus_2d"
+///    },
+///    "outer_radius_nm": {
+///      "$ref": "#/$defs/NonNegativeNm"
+///    }
+///  },
+///  "additionalProperties": false
+///}
+/// ```
+/// </details>
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct Annulus2d {
+    pub center_nm: NmPoint,
+    pub inner_radius_nm: NonNegativeNm,
+    #[serde(deserialize_with = "crate::materialization_contract::deserialize_annulus_2d_kind")]
+    pub kind: ::std::string::String,
+    pub outer_radius_nm: NonNegativeNm,
+}
+///Circular arc segment through `mid_nm` to `end_nm`, the form KiCad stores.
+///
+/// <details><summary>JSON schema</summary>
+///
+/// ```json
+///{
+///  "description": "Circular arc segment through `mid_nm` to `end_nm`, the form KiCad stores.",
+///  "type": "object",
+///  "required": [
+///    "end_nm",
+///    "kind",
+///    "mid_nm"
+///  ],
+///  "properties": {
+///    "end_nm": {
+///      "$ref": "#/$defs/NmPoint"
+///    },
+///    "kind": {
+///      "type": "string",
+///      "const": "arc"
+///    },
+///    "mid_nm": {
+///      "$ref": "#/$defs/NmPoint"
+///    }
+///  },
+///  "additionalProperties": false
+///}
+/// ```
+/// </details>
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct ArcSegment {
+    pub end_nm: NmPoint,
+    #[serde(deserialize_with = "crate::materialization_contract::deserialize_arc_segment_kind")]
+    pub kind: ::std::string::String,
+    pub mid_nm: NmPoint,
+}
+///Controlled-depth removal of barrel plating from one side.
+///
+/// <details><summary>JSON schema</summary>
+///
+/// ```json
+///{
+///  "description": "Controlled-depth removal of barrel plating from one side.",
+///  "type": "object",
+///  "required": [
+///    "side"
+///  ],
+///  "properties": {
+///    "diameter_nm": {
+///      "$ref": "#/$defs/NonNegativeNm"
+///    },
+///    "side": {
+///      "$ref": "#/$defs/BoardSide"
+///    },
+///    "until_slice_key": {
+///      "type": "string"
+///    }
+///  },
+///  "additionalProperties": false
+///}
+/// ```
+/// </details>
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct Backdrill {
+    #[serde(
+        default,
+        deserialize_with = "crate::deserialize_present_nonnull",
+        skip_serializing_if = "::std::option::Option::is_none"
+    )]
+    pub diameter_nm: ::std::option::Option<NonNegativeNm>,
+    pub side: BoardSide,
+    #[serde(
+        default,
+        deserialize_with = "crate::deserialize_present_nonnull",
+        skip_serializing_if = "::std::option::Option::is_none"
+    )]
+    pub until_slice_key: ::std::option::Option<::std::string::String>,
+}
+/**Links one operation to the KiCad object that produced it. Required for
+simulation and picking; geometry consumers may ignore it.*/
+///
+/// <details><summary>JSON schema</summary>
+///
+/// ```json
+///{
+///  "description": "Links one operation to the KiCad object that produced it. Required for\nsimulation and picking; geometry consumers may ignore it.",
+///  "type": "object",
+///  "required": [
+///    "operation_index",
+///    "source_kind",
+///    "source_uid"
+///  ],
+///  "properties": {
+///    "net_key": {
+///      "type": "string"
+///    },
+///    "operation_index": {
+///      "type": "integer",
+///      "maximum": 4294967295.0,
+///      "minimum": 0.0
+///    },
+///    "pad_number": {
+///      "type": "string"
+///    },
+///    "refdes": {
+///      "type": "string"
+///    },
+///    "source_kind": {
+///      "$ref": "#/$defs/BindingSourceKind"
+///    },
+///    "source_uid": {
+///      "type": "string"
+///    }
+///  },
+///  "additionalProperties": false
+///}
+/// ```
+/// </details>
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct BindingEntry {
+    #[serde(
+        default,
+        deserialize_with = "crate::deserialize_present_nonnull",
+        skip_serializing_if = "::std::option::Option::is_none"
+    )]
+    pub net_key: ::std::option::Option<::std::string::String>,
+    pub operation_index: u32,
+    #[serde(
+        default,
+        deserialize_with = "crate::deserialize_present_nonnull",
+        skip_serializing_if = "::std::option::Option::is_none"
+    )]
+    pub pad_number: ::std::option::Option<::std::string::String>,
+    #[serde(
+        default,
+        deserialize_with = "crate::deserialize_present_nonnull",
+        skip_serializing_if = "::std::option::Option::is_none"
+    )]
+    pub refdes: ::std::option::Option<::std::string::String>,
+    pub source_kind: BindingSourceKind,
+    pub source_uid: ::std::string::String,
+}
+///`BindingSourceKind`
+///
+/// <details><summary>JSON schema</summary>
+///
+/// ```json
+///{
+///  "type": "string",
+///  "enum": [
+///    "track",
+///    "track_arc",
+///    "via",
+///    "pad",
+///    "zone_fill",
+///    "board_graphic",
+///    "footprint_graphic",
+///    "board_text",
+///    "footprint_text",
+///    "profile",
+///    "derived"
+///  ]
+///}
+/// ```
+/// </details>
+#[derive(
+    ::serde::Deserialize,
+    ::serde::Serialize,
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd,
+)]
+pub enum BindingSourceKind {
+    #[serde(rename = "track")]
+    Track,
+    #[serde(rename = "track_arc")]
+    TrackArc,
+    #[serde(rename = "via")]
+    Via,
+    #[serde(rename = "pad")]
+    Pad,
+    #[serde(rename = "zone_fill")]
+    ZoneFill,
+    #[serde(rename = "board_graphic")]
+    BoardGraphic,
+    #[serde(rename = "footprint_graphic")]
+    FootprintGraphic,
+    #[serde(rename = "board_text")]
+    BoardText,
+    #[serde(rename = "footprint_text")]
+    FootprintText,
+    #[serde(rename = "profile")]
+    Profile,
+    #[serde(rename = "derived")]
+    Derived,
+}
+impl ::std::fmt::Display for BindingSourceKind {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        match *self {
+            Self::Track => f.write_str("track"),
+            Self::TrackArc => f.write_str("track_arc"),
+            Self::Via => f.write_str("via"),
+            Self::Pad => f.write_str("pad"),
+            Self::ZoneFill => f.write_str("zone_fill"),
+            Self::BoardGraphic => f.write_str("board_graphic"),
+            Self::FootprintGraphic => f.write_str("footprint_graphic"),
+            Self::BoardText => f.write_str("board_text"),
+            Self::FootprintText => f.write_str("footprint_text"),
+            Self::Profile => f.write_str("profile"),
+            Self::Derived => f.write_str("derived"),
+        }
+    }
+}
+impl ::std::str::FromStr for BindingSourceKind {
+    type Err = self::error::ConversionError;
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+        match value {
+            "track" => Ok(Self::Track),
+            "track_arc" => Ok(Self::TrackArc),
+            "via" => Ok(Self::Via),
+            "pad" => Ok(Self::Pad),
+            "zone_fill" => Ok(Self::ZoneFill),
+            "board_graphic" => Ok(Self::BoardGraphic),
+            "footprint_graphic" => Ok(Self::FootprintGraphic),
+            "board_text" => Ok(Self::BoardText),
+            "footprint_text" => Ok(Self::FootprintText),
+            "profile" => Ok(Self::Profile),
+            "derived" => Ok(Self::Derived),
+            _ => Err("invalid value".into()),
+        }
+    }
+}
+impl ::std::convert::TryFrom<&str> for BindingSourceKind {
+    type Error = self::error::ConversionError;
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+impl ::std::convert::TryFrom<&::std::string::String> for BindingSourceKind {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: &::std::string::String,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+impl ::std::convert::TryFrom<::std::string::String> for BindingSourceKind {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: ::std::string::String,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+///`BoardSide`
+///
+/// <details><summary>JSON schema</summary>
+///
+/// ```json
+///{
+///  "type": "string",
+///  "enum": [
+///    "front",
+///    "back"
+///  ]
+///}
+/// ```
+/// </details>
+#[derive(
+    ::serde::Deserialize,
+    ::serde::Serialize,
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd,
+)]
+pub enum BoardSide {
+    #[serde(rename = "front")]
+    Front,
+    #[serde(rename = "back")]
+    Back,
+}
+impl ::std::fmt::Display for BoardSide {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        match *self {
+            Self::Front => f.write_str("front"),
+            Self::Back => f.write_str("back"),
+        }
+    }
+}
+impl ::std::str::FromStr for BoardSide {
+    type Err = self::error::ConversionError;
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+        match value {
+            "front" => Ok(Self::Front),
+            "back" => Ok(Self::Back),
+            _ => Err("invalid value".into()),
+        }
+    }
+}
+impl ::std::convert::TryFrom<&str> for BoardSide {
+    type Error = self::error::ConversionError;
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+impl ::std::convert::TryFrom<&::std::string::String> for BoardSide {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: &::std::string::String,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+impl ::std::convert::TryFrom<::std::string::String> for BoardSide {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: ::std::string::String,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+///Stadium between two centres with a common radius.
+///
+/// <details><summary>JSON schema</summary>
+///
+/// ```json
+///{
+///  "description": "Stadium between two centres with a common radius.",
+///  "type": "object",
+///  "required": [
+///    "end_nm",
+///    "kind",
+///    "radius_nm",
+///    "start_nm"
+///  ],
+///  "properties": {
+///    "end_nm": {
+///      "$ref": "#/$defs/NmPoint"
+///    },
+///    "kind": {
+///      "type": "string",
+///      "const": "capsule_2d"
+///    },
+///    "radius_nm": {
+///      "$ref": "#/$defs/NonNegativeNm"
+///    },
+///    "start_nm": {
+///      "$ref": "#/$defs/NmPoint"
+///    }
+///  },
+///  "additionalProperties": false
+///}
+/// ```
+/// </details>
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct Capsule2d {
+    pub end_nm: NmPoint,
+    #[serde(deserialize_with = "crate::materialization_contract::deserialize_capsule_2d_kind")]
+    pub kind: ::std::string::String,
+    pub radius_nm: NonNegativeNm,
+    pub start_nm: NmPoint,
+}
+///Rectangle with the listed corners chamfered; unlisted corners keep `radius_nm`.
+///
+/// <details><summary>JSON schema</summary>
+///
+/// ```json
+///{
+///  "description": "Rectangle with the listed corners chamfered; unlisted corners keep `radius_nm`.",
+///  "type": "object",
+///  "required": [
+///    "center_nm",
+///    "chamfer_nm",
+///    "chamfered_corners",
+///    "height_nm",
+///    "kind",
+///    "radius_nm",
+///    "width_nm"
+///  ],
+///  "properties": {
+///    "center_nm": {
+///      "$ref": "#/$defs/NmPoint"
+///    },
+///    "chamfer_nm": {
+///      "$ref": "#/$defs/NonNegativeNm"
+///    },
+///    "chamfered_corners": {
+///      "type": "array",
+///      "items": {
+///        "$ref": "#/$defs/RectCorner"
+///      }
+///    },
+///    "height_nm": {
+///      "$ref": "#/$defs/NonNegativeNm"
+///    },
+///    "kind": {
+///      "type": "string",
+///      "const": "chamfered_rect_2d"
+///    },
+///    "radius_nm": {
+///      "$ref": "#/$defs/NonNegativeNm"
+///    },
+///    "width_nm": {
+///      "$ref": "#/$defs/NonNegativeNm"
+///    }
+///  },
+///  "additionalProperties": false
+///}
+/// ```
+/// </details>
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct ChamferedRect2d {
+    pub center_nm: NmPoint,
+    pub chamfer_nm: NonNegativeNm,
+    pub chamfered_corners: ::std::vec::Vec<RectCorner>,
+    pub height_nm: NonNegativeNm,
+    #[serde(
+        deserialize_with = "crate::materialization_contract::deserialize_chamfered_rect_2d_kind"
+    )]
+    pub kind: ::std::string::String,
+    pub radius_nm: NonNegativeNm,
+    pub width_nm: NonNegativeNm,
+}
+/**Operations of one (slice, tile) occupy a contiguous index range. An
+operation belongs to the tile containing the centre of its bounds; the
+chunk bounds cover every operation in it.*/
+///
+/// <details><summary>JSON schema</summary>
+///
+/// ```json
+///{
+///  "description": "Operations of one (slice, tile) occupy a contiguous index range. An\noperation belongs to the tile containing the centre of its bounds; the\nchunk bounds cover every operation in it.",
+///  "type": "object",
+///  "required": [
+///    "bounds",
+///    "first_operation_index",
+///    "net_keys",
+///    "operation_count",
+///    "slice_key",
+///    "tile_x",
+///    "tile_y"
+///  ],
+///  "properties": {
+///    "bounds": {
+///      "$ref": "#/$defs/NmBounds"
+///    },
+///    "first_operation_index": {
+///      "type": "integer",
+///      "maximum": 4294967295.0,
+///      "minimum": 0.0
+///    },
+///    "net_keys": {
+///      "type": "array",
+///      "items": {
+///        "type": "string"
+///      }
+///    },
+///    "operation_count": {
+///      "type": "integer",
+///      "maximum": 4294967295.0,
+///      "minimum": 0.0
+///    },
+///    "slice_key": {
+///      "type": "string"
+///    },
+///    "tile_x": {
+///      "type": "integer",
+///      "maximum": 2147483647.0,
+///      "minimum": -2147483648.0
+///    },
+///    "tile_y": {
+///      "type": "integer",
+///      "maximum": 2147483647.0,
+///      "minimum": -2147483648.0
+///    }
+///  },
+///  "additionalProperties": false
+///}
+/// ```
+/// </details>
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct ChunkEntry {
+    pub bounds: NmBounds,
+    pub first_operation_index: u32,
+    pub net_keys: ::std::vec::Vec<::std::string::String>,
+    pub operation_count: u32,
+    pub slice_key: ::std::string::String,
+    pub tile_x: i32,
+    pub tile_y: i32,
+}
+///`Component`
+///
+/// <details><summary>JSON schema</summary>
+///
+/// ```json
+///{
+///  "type": "object",
+///  "required": [
+///    "affine",
+///    "footprint",
+///    "refdes",
+///    "side",
+///    "source_uid"
+///  ],
+///  "properties": {
+///    "affine": {
+///      "$ref": "#/$defs/Affine2D"
+///    },
+///    "body_bounds": {
+///      "description": "Body extent in footprint-local coordinates, from courtyard or fabrication outline.",
+///      "$ref": "#/$defs/NmBounds"
+///    },
+///    "body_height_nm": {
+///      "$ref": "#/$defs/NonNegativeNm"
+///    },
+///    "footprint": {
+///      "type": "string"
+///    },
+///    "refdes": {
+///      "type": "string"
+///    },
+///    "side": {
+///      "$ref": "#/$defs/BoardSide"
+///    },
+///    "source_uid": {
+///      "type": "string"
+///    }
+///  },
+///  "additionalProperties": false
+///}
+/// ```
+/// </details>
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct Component {
+    pub affine: Affine2D,
+    ///Body extent in footprint-local coordinates, from courtyard or fabrication outline.
+    #[serde(
+        default,
+        deserialize_with = "crate::deserialize_present_nonnull",
+        skip_serializing_if = "::std::option::Option::is_none"
+    )]
+    pub body_bounds: ::std::option::Option<NmBounds>,
+    #[serde(
+        default,
+        deserialize_with = "crate::deserialize_present_nonnull",
+        skip_serializing_if = "::std::option::Option::is_none"
+    )]
+    pub body_height_nm: ::std::option::Option<NonNegativeNm>,
+    pub footprint: ::std::string::String,
+    pub refdes: ::std::string::String,
+    pub side: BoardSide,
+    pub source_uid: ::std::string::String,
+}
+///Closed contour of line and arc segments. The last segment returns to `start_nm`.
+///
+/// <details><summary>JSON schema</summary>
+///
+/// ```json
+///{
+///  "description": "Closed contour of line and arc segments. The last segment returns to `start_nm`.",
+///  "type": "object",
+///  "required": [
+///    "segments",
+///    "start_nm"
+///  ],
+///  "properties": {
+///    "segments": {
+///      "type": "array",
+///      "items": {
+///        "$ref": "#/$defs/PathSegment"
+///      },
+///      "minItems": 1
+///    },
+///    "start_nm": {
+///      "$ref": "#/$defs/NmPoint"
+///    }
+///  },
+///  "additionalProperties": false
+///}
+/// ```
+/// </details>
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct Contour {
+    pub segments: ::std::vec::Vec<PathSegment>,
+    pub start_nm: NmPoint,
+}
+///`DiagnosticSeverity`
+///
+/// <details><summary>JSON schema</summary>
+///
+/// ```json
+///{
+///  "type": "string",
+///  "enum": [
+///    "info",
+///    "warning",
+///    "error"
+///  ]
+///}
+/// ```
+/// </details>
+#[derive(
+    ::serde::Deserialize,
+    ::serde::Serialize,
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd,
+)]
+pub enum DiagnosticSeverity {
+    #[serde(rename = "info")]
+    Info,
+    #[serde(rename = "warning")]
+    Warning,
+    #[serde(rename = "error")]
+    Error,
+}
+impl ::std::fmt::Display for DiagnosticSeverity {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        match *self {
+            Self::Info => f.write_str("info"),
+            Self::Warning => f.write_str("warning"),
+            Self::Error => f.write_str("error"),
+        }
+    }
+}
+impl ::std::str::FromStr for DiagnosticSeverity {
+    type Err = self::error::ConversionError;
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+        match value {
+            "info" => Ok(Self::Info),
+            "warning" => Ok(Self::Warning),
+            "error" => Ok(Self::Error),
+            _ => Err("invalid value".into()),
+        }
+    }
+}
+impl ::std::convert::TryFrom<&str> for DiagnosticSeverity {
+    type Error = self::error::ConversionError;
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+impl ::std::convert::TryFrom<&::std::string::String> for DiagnosticSeverity {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: &::std::string::String,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+impl ::std::convert::TryFrom<::std::string::String> for DiagnosticSeverity {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: ::std::string::String,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+///`DiffPair`
+///
+/// <details><summary>JSON schema</summary>
+///
+/// ```json
+///{
+///  "type": "object",
+///  "required": [
+///    "base_name",
+///    "negative_net_key",
+///    "positive_net_key"
+///  ],
+///  "properties": {
+///    "base_name": {
+///      "type": "string"
+///    },
+///    "negative_net_key": {
+///      "type": "string"
+///    },
+///    "positive_net_key": {
+///      "type": "string"
+///    }
+///  },
+///  "additionalProperties": false
+///}
+/// ```
+/// </details>
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct DiffPair {
+    pub base_name: ::std::string::String,
+    pub negative_net_key: ::std::string::String,
+    pub positive_net_key: ::std::string::String,
+}
+///`Disk2d`
+///
+/// <details><summary>JSON schema</summary>
+///
+/// ```json
+///{
+///  "type": "object",
+///  "required": [
+///    "center_nm",
+///    "kind",
+///    "radius_nm"
+///  ],
+///  "properties": {
+///    "center_nm": {
+///      "$ref": "#/$defs/NmPoint"
+///    },
+///    "kind": {
+///      "type": "string",
+///      "const": "disk_2d"
+///    },
+///    "radius_nm": {
+///      "$ref": "#/$defs/NonNegativeNm"
+///    }
+///  },
+///  "additionalProperties": false
+///}
+/// ```
+/// </details>
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct Disk2d {
+    pub center_nm: NmPoint,
+    #[serde(deserialize_with = "crate::materialization_contract::deserialize_disk_2d_kind")]
+    pub kind: ::std::string::String,
+    pub radius_nm: NonNegativeNm,
+}
+///Drilled or milled hole spanning `start_slice_key` to `end_slice_key` inclusive.
+///
+/// <details><summary>JSON schema</summary>
+///
+/// ```json
+///{
+///  "description": "Drilled or milled hole spanning `start_slice_key` to `end_slice_key` inclusive.",
+///  "type": "object",
+///  "required": [
+///    "affine",
+///    "backdrills",
+///    "bounds",
+///    "end_slice_key",
+///    "index",
+///    "kind",
+///    "plating",
+///    "shape",
+///    "start_slice_key"
+///  ],
+///  "properties": {
+///    "affine": {
+///      "$ref": "#/$defs/Affine2D"
+///    },
+///    "backdrills": {
+///      "type": "array",
+///      "items": {
+///        "$ref": "#/$defs/Backdrill"
+///      }
+///    },
+///    "bounds": {
+///      "$ref": "#/$defs/NmBounds"
+///    },
+///    "end_slice_key": {
+///      "type": "string"
+///    },
+///    "index": {
+///      "type": "integer",
+///      "maximum": 4294967295.0,
+///      "minimum": 0.0
+///    },
+///    "kind": {
+///      "type": "string",
+///      "const": "hole"
+///    },
+///    "net_key": {
+///      "type": "string"
+///    },
+///    "plating": {
+///      "$ref": "#/$defs/HolePlating"
+///    },
+///    "plating_thickness_nm": {
+///      "$ref": "#/$defs/NonNegativeNm"
+///    },
+///    "protection": {
+///      "$ref": "#/$defs/HoleProtection"
+///    },
+///    "shape": {
+///      "$ref": "#/$defs/Shape2d"
+///    },
+///    "start_slice_key": {
+///      "type": "string"
+///    }
+///  },
+///  "additionalProperties": false
+///}
+/// ```
+/// </details>
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct HoleOperation {
+    pub affine: Affine2D,
+    pub backdrills: ::std::vec::Vec<Backdrill>,
+    pub bounds: NmBounds,
+    pub end_slice_key: ::std::string::String,
+    pub index: u32,
+    #[serde(deserialize_with = "crate::materialization_contract::deserialize_hole_operation_kind")]
+    pub kind: ::std::string::String,
+    #[serde(
+        default,
+        deserialize_with = "crate::deserialize_present_nonnull",
+        skip_serializing_if = "::std::option::Option::is_none"
+    )]
+    pub net_key: ::std::option::Option<::std::string::String>,
+    pub plating: HolePlating,
+    #[serde(
+        default,
+        deserialize_with = "crate::deserialize_present_nonnull",
+        skip_serializing_if = "::std::option::Option::is_none"
+    )]
+    pub plating_thickness_nm: ::std::option::Option<NonNegativeNm>,
+    #[serde(
+        default,
+        deserialize_with = "crate::deserialize_present_nonnull",
+        skip_serializing_if = "::std::option::Option::is_none"
+    )]
+    pub protection: ::std::option::Option<HoleProtection>,
+    pub shape: Shape2d,
+    pub start_slice_key: ::std::string::String,
+}
+///`HolePlating`
+///
+/// <details><summary>JSON schema</summary>
+///
+/// ```json
+///{
+///  "type": "string",
+///  "enum": [
+///    "plated",
+///    "unplated"
+///  ]
+///}
+/// ```
+/// </details>
+#[derive(
+    ::serde::Deserialize,
+    ::serde::Serialize,
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd,
+)]
+pub enum HolePlating {
+    #[serde(rename = "plated")]
+    Plated,
+    #[serde(rename = "unplated")]
+    Unplated,
+}
+impl ::std::fmt::Display for HolePlating {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        match *self {
+            Self::Plated => f.write_str("plated"),
+            Self::Unplated => f.write_str("unplated"),
+        }
+    }
+}
+impl ::std::str::FromStr for HolePlating {
+    type Err = self::error::ConversionError;
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+        match value {
+            "plated" => Ok(Self::Plated),
+            "unplated" => Ok(Self::Unplated),
+            _ => Err("invalid value".into()),
+        }
+    }
+}
+impl ::std::convert::TryFrom<&str> for HolePlating {
+    type Error = self::error::ConversionError;
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+impl ::std::convert::TryFrom<&::std::string::String> for HolePlating {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: &::std::string::String,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+impl ::std::convert::TryFrom<::std::string::String> for HolePlating {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: ::std::string::String,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+///`HoleProtection`
+///
+/// <details><summary>JSON schema</summary>
+///
+/// ```json
+///{
+///  "type": "object",
+///  "required": [
+///    "back",
+///    "capped",
+///    "filled",
+///    "front"
+///  ],
+///  "properties": {
+///    "back": {
+///      "$ref": "#/$defs/SideProtection"
+///    },
+///    "capped": {
+///      "$ref": "#/$defs/ProtectionState"
+///    },
+///    "filled": {
+///      "$ref": "#/$defs/ProtectionState"
+///    },
+///    "front": {
+///      "$ref": "#/$defs/SideProtection"
+///    }
+///  },
+///  "additionalProperties": false
+///}
+/// ```
+/// </details>
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct HoleProtection {
+    pub back: SideProtection,
+    pub capped: ProtectionState,
+    pub filled: ProtectionState,
+    pub front: SideProtection,
+}
+///Straight path segment to `end_nm`.
+///
+/// <details><summary>JSON schema</summary>
+///
+/// ```json
+///{
+///  "description": "Straight path segment to `end_nm`.",
+///  "type": "object",
+///  "required": [
+///    "end_nm",
+///    "kind"
+///  ],
+///  "properties": {
+///    "end_nm": {
+///      "$ref": "#/$defs/NmPoint"
+///    },
+///    "kind": {
+///      "type": "string",
+///      "const": "line"
+///    }
+///  },
+///  "additionalProperties": false
+///}
+/// ```
+/// </details>
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct LineSegment {
+    pub end_nm: NmPoint,
+    #[serde(deserialize_with = "crate::materialization_contract::deserialize_line_segment_kind")]
+    pub kind: ::std::string::String,
+}
+///`MaterialAction`
+///
+/// <details><summary>JSON schema</summary>
+///
+/// ```json
+///{
+///  "type": "string",
+///  "enum": [
+///    "add",
+///    "subtract"
+///  ]
+///}
+/// ```
+/// </details>
+#[derive(
+    ::serde::Deserialize,
+    ::serde::Serialize,
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd,
+)]
+pub enum MaterialAction {
+    #[serde(rename = "add")]
+    Add,
+    #[serde(rename = "subtract")]
+    Subtract,
+}
+impl ::std::fmt::Display for MaterialAction {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        match *self {
+            Self::Add => f.write_str("add"),
+            Self::Subtract => f.write_str("subtract"),
+        }
+    }
+}
+impl ::std::str::FromStr for MaterialAction {
+    type Err = self::error::ConversionError;
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+        match value {
+            "add" => Ok(Self::Add),
+            "subtract" => Ok(Self::Subtract),
+            _ => Err("invalid value".into()),
+        }
+    }
+}
+impl ::std::convert::TryFrom<&str> for MaterialAction {
+    type Error = self::error::ConversionError;
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+impl ::std::convert::TryFrom<&::std::string::String> for MaterialAction {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: &::std::string::String,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+impl ::std::convert::TryFrom<::std::string::String> for MaterialAction {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: ::std::string::String,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+///`MaterialOperation`
+///
+/// <details><summary>JSON schema</summary>
+///
+/// ```json
+///{
+///  "oneOf": [
+///    {
+///      "$ref": "#/$defs/SurfaceOperation"
+///    },
+///    {
+///      "$ref": "#/$defs/HoleOperation"
+///    }
+///  ]
+///}
+/// ```
+/// </details>
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(untagged)]
+pub enum MaterialOperation {
+    SurfaceOperation(SurfaceOperation),
+    HoleOperation(HoleOperation),
+}
+impl ::std::convert::From<SurfaceOperation> for MaterialOperation {
+    fn from(value: SurfaceOperation) -> Self {
+        Self::SurfaceOperation(value)
+    }
+}
+impl ::std::convert::From<HoleOperation> for MaterialOperation {
+    fn from(value: HoleOperation) -> Self {
+        Self::HoleOperation(value)
+    }
+}
+/**Selectable products. Every operation belongs to exactly one product. The
+board profile has no product of its own: it is the add operation of every
+dielectric and solder-mask slice, with cutouts subtracted there.*/
+///
+/// <details><summary>JSON schema</summary>
+///
+/// ```json
+///{
+///  "description": "Selectable products. Every operation belongs to exactly one product. The\nboard profile has no product of its own: it is the add operation of every\ndielectric and solder-mask slice, with cutouts subtracted there.",
+///  "type": "string",
+///  "enum": [
+///    "copper",
+///    "holes",
+///    "dielectric",
+///    "solder_mask",
+///    "paste",
+///    "silkscreen",
+///    "components"
+///  ]
+///}
+/// ```
+/// </details>
+#[derive(
+    ::serde::Deserialize,
+    ::serde::Serialize,
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd,
+)]
+pub enum MaterialProduct {
+    #[serde(rename = "copper")]
+    Copper,
+    #[serde(rename = "holes")]
+    Holes,
+    #[serde(rename = "dielectric")]
+    Dielectric,
+    #[serde(rename = "solder_mask")]
+    SolderMask,
+    #[serde(rename = "paste")]
+    Paste,
+    #[serde(rename = "silkscreen")]
+    Silkscreen,
+    #[serde(rename = "components")]
+    Components,
+}
+impl ::std::fmt::Display for MaterialProduct {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        match *self {
+            Self::Copper => f.write_str("copper"),
+            Self::Holes => f.write_str("holes"),
+            Self::Dielectric => f.write_str("dielectric"),
+            Self::SolderMask => f.write_str("solder_mask"),
+            Self::Paste => f.write_str("paste"),
+            Self::Silkscreen => f.write_str("silkscreen"),
+            Self::Components => f.write_str("components"),
+        }
+    }
+}
+impl ::std::str::FromStr for MaterialProduct {
+    type Err = self::error::ConversionError;
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+        match value {
+            "copper" => Ok(Self::Copper),
+            "holes" => Ok(Self::Holes),
+            "dielectric" => Ok(Self::Dielectric),
+            "solder_mask" => Ok(Self::SolderMask),
+            "paste" => Ok(Self::Paste),
+            "silkscreen" => Ok(Self::Silkscreen),
+            "components" => Ok(Self::Components),
+            _ => Err("invalid value".into()),
+        }
+    }
+}
+impl ::std::convert::TryFrom<&str> for MaterialProduct {
+    type Error = self::error::ConversionError;
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+impl ::std::convert::TryFrom<&::std::string::String> for MaterialProduct {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: &::std::string::String,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+impl ::std::convert::TryFrom<::std::string::String> for MaterialProduct {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: ::std::string::String,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+///`MaterializationCoordinateSystem`
+///
+/// <details><summary>JSON schema</summary>
+///
+/// ```json
+///{
+///  "type": "object",
+///  "required": [
+///    "unit",
+///    "x_axis",
+///    "y_axis"
+///  ],
+///  "properties": {
+///    "unit": {
+///      "type": "string",
+///      "const": "nm"
+///    },
+///    "x_axis": {
+///      "type": "string",
+///      "const": "board_right"
+///    },
+///    "y_axis": {
+///      "type": "string",
+///      "const": "board_down"
+///    }
+///  },
+///  "additionalProperties": false
+///}
+/// ```
+/// </details>
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct MaterializationCoordinateSystem {
+    pub unit: ::std::string::String,
+    pub x_axis: ::std::string::String,
+    pub y_axis: ::std::string::String,
+}
+///`MaterializationDiagnostic`
+///
+/// <details><summary>JSON schema</summary>
+///
+/// ```json
+///{
+///  "type": "object",
+///  "required": [
+///    "code",
+///    "message",
+///    "severity"
+///  ],
+///  "properties": {
+///    "code": {
+///      "type": "string"
+///    },
+///    "message": {
+///      "type": "string"
+///    },
+///    "severity": {
+///      "$ref": "#/$defs/DiagnosticSeverity"
+///    },
+///    "source_uid": {
+///      "type": "string"
+///    }
+///  },
+///  "additionalProperties": false
+///}
+/// ```
+/// </details>
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct MaterializationDiagnostic {
+    pub code: ::std::string::String,
+    pub message: ::std::string::String,
+    pub severity: DiagnosticSeverity,
+    #[serde(
+        default,
+        deserialize_with = "crate::deserialize_present_nonnull",
+        skip_serializing_if = "::std::option::Option::is_none"
+    )]
+    pub source_uid: ::std::option::Option<::std::string::String>,
+}
+/**Analytic materialization of one KiCad board. This JSON form is the
+deterministic debug view; the packed columnar encoding is canonical.*/
+///
+/// <details><summary>JSON schema</summary>
+///
+/// ```json
+///{
+///  "$id": "urn:wavenumber:schema:kicad_monkey.materialization.document:a0",
+///  "title": "Materialization document a0",
+///  "description": "Analytic materialization of one KiCad board. This JSON form is the\ndeterministic debug view; the packed columnar encoding is canonical.",
+///  "type": "object",
+///  "required": [
+///    "binding",
+///    "chunks",
+///    "components",
+///    "coordinate_system",
+///    "diagnostics",
+///    "diff_pairs",
+///    "net_classes",
+///    "nets",
+///    "operations",
+///    "producer",
+///    "schema",
+///    "scope",
+///    "source",
+///    "stack",
+///    "type",
+///    "version"
+///  ],
+///  "properties": {
+///    "binding": {
+///      "type": "array",
+///      "items": {
+///        "$ref": "#/$defs/BindingEntry"
+///      }
+///    },
+///    "chunks": {
+///      "type": "array",
+///      "items": {
+///        "$ref": "#/$defs/ChunkEntry"
+///      }
+///    },
+///    "components": {
+///      "type": "array",
+///      "items": {
+///        "$ref": "#/$defs/Component"
+///      }
+///    },
+///    "coordinate_system": {
+///      "$ref": "#/$defs/MaterializationCoordinateSystem"
+///    },
+///    "diagnostics": {
+///      "type": "array",
+///      "items": {
+///        "$ref": "#/$defs/MaterializationDiagnostic"
+///      }
+///    },
+///    "diff_pairs": {
+///      "type": "array",
+///      "items": {
+///        "$ref": "#/$defs/DiffPair"
+///      }
+///    },
+///    "net_classes": {
+///      "type": "array",
+///      "items": {
+///        "$ref": "#/$defs/NetClass"
+///      }
+///    },
+///    "nets": {
+///      "type": "array",
+///      "items": {
+///        "$ref": "#/$defs/Net"
+///      }
+///    },
+///    "operations": {
+///      "type": "array",
+///      "items": {
+///        "$ref": "#/$defs/MaterialOperation"
+///      }
+///    },
+///    "producer": {
+///      "$ref": "#/$defs/MaterializationProducer"
+///    },
+///    "schema": {
+///      "type": "string",
+///      "const": "kicad_monkey.materialization.a0"
+///    },
+///    "scope": {
+///      "$ref": "#/$defs/MaterializationScope"
+///    },
+///    "source": {
+///      "$ref": "#/$defs/MaterializationSource"
+///    },
+///    "stack": {
+///      "$ref": "#/$defs/Stack"
+///    },
+///    "type": {
+///      "type": "string",
+///      "const": "kicad_monkey.materialization.document"
+///    },
+///    "version": {
+///      "type": "string",
+///      "const": "a0"
+///    }
+///  },
+///  "additionalProperties": false
+///}
+/// ```
+/// </details>
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct MaterializationDocumentA0 {
+    pub binding: ::std::vec::Vec<BindingEntry>,
+    pub chunks: ::std::vec::Vec<ChunkEntry>,
+    pub components: ::std::vec::Vec<Component>,
+    pub coordinate_system: MaterializationCoordinateSystem,
+    pub diagnostics: ::std::vec::Vec<MaterializationDiagnostic>,
+    pub diff_pairs: ::std::vec::Vec<DiffPair>,
+    pub net_classes: ::std::vec::Vec<NetClass>,
+    pub nets: ::std::vec::Vec<Net>,
+    pub operations: ::std::vec::Vec<MaterialOperation>,
+    pub producer: MaterializationProducer,
+    pub schema: ::std::string::String,
+    pub scope: MaterializationScope,
+    pub source: MaterializationSource,
+    pub stack: Stack,
+    #[serde(rename = "type")]
+    pub type_: ::std::string::String,
+    pub version: ::std::string::String,
+}
+///`MaterializationProducer`
+///
+/// <details><summary>JSON schema</summary>
+///
+/// ```json
+///{
+///  "type": "object",
+///  "required": [
+///    "name",
+///    "version"
+///  ],
+///  "properties": {
+///    "name": {
+///      "type": "string"
+///    },
+///    "version": {
+///      "type": "string"
+///    }
+///  },
+///  "additionalProperties": false
+///}
+/// ```
+/// </details>
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct MaterializationProducer {
+    pub name: ::std::string::String,
+    pub version: ::std::string::String,
+}
+///`MaterializationScope`
+///
+/// <details><summary>JSON schema</summary>
+///
+/// ```json
+///{
+///  "type": "object",
+///  "required": [
+///    "complete",
+///    "products",
+///    "tile_size_nm"
+///  ],
+///  "properties": {
+///    "complete": {
+///      "description": "True only when every product, slice, and net was materialized without a region.",
+///      "type": "boolean"
+///    },
+///    "net_keys": {
+///      "description": "Absent means every net.",
+///      "type": "array",
+///      "items": {
+///        "type": "string"
+///      }
+///    },
+///    "products": {
+///      "type": "array",
+///      "items": {
+///        "$ref": "#/$defs/MaterialProduct"
+///      }
+///    },
+///    "region": {
+///      "$ref": "#/$defs/NmBounds"
+///    },
+///    "slice_keys": {
+///      "description": "Absent means every slice.",
+///      "type": "array",
+///      "items": {
+///        "type": "string"
+///      }
+///    },
+///    "tile_size_nm": {
+///      "$ref": "#/$defs/NonNegativeNm"
+///    }
+///  },
+///  "additionalProperties": false
+///}
+/// ```
+/// </details>
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct MaterializationScope {
+    ///True only when every product, slice, and net was materialized without a region.
+    pub complete: bool,
+    ///Absent means every net.
+    #[serde(default, skip_serializing_if = "::std::vec::Vec::is_empty")]
+    pub net_keys: ::std::vec::Vec<::std::string::String>,
+    pub products: ::std::vec::Vec<MaterialProduct>,
+    #[serde(
+        default,
+        deserialize_with = "crate::deserialize_present_nonnull",
+        skip_serializing_if = "::std::option::Option::is_none"
+    )]
+    pub region: ::std::option::Option<NmBounds>,
+    ///Absent means every slice.
+    #[serde(default, skip_serializing_if = "::std::vec::Vec::is_empty")]
+    pub slice_keys: ::std::vec::Vec<::std::string::String>,
+    pub tile_size_nm: NonNegativeNm,
+}
+///`MaterializationSource`
+///
+/// <details><summary>JSON schema</summary>
+///
+/// ```json
+///{
+///  "type": "object",
+///  "required": [
+///    "sha256",
+///    "source_bytes"
+///  ],
+///  "properties": {
+///    "sha256": {
+///      "type": "string"
+///    },
+///    "source_bytes": {
+///      "type": "string"
+///    }
+///  },
+///  "additionalProperties": false
+///}
+/// ```
+/// </details>
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct MaterializationSource {
+    pub sha256: ::std::string::String,
+    pub source_bytes: ::std::string::String,
+}
+///Resolved electrical net. The empty key is the no-net assignment.
+///
+/// <details><summary>JSON schema</summary>
+///
+/// ```json
+///{
+///  "description": "Resolved electrical net. The empty key is the no-net assignment.",
+///  "type": "object",
+///  "required": [
+///    "key",
+///    "name"
+///  ],
+///  "properties": {
+///    "key": {
+///      "type": "string"
+///    },
+///    "name": {
+///      "type": "string"
+///    },
+///    "net_class": {
+///      "type": "string"
+///    }
+///  },
+///  "additionalProperties": false
+///}
+/// ```
+/// </details>
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct Net {
+    pub key: ::std::string::String,
+    pub name: ::std::string::String,
+    #[serde(
+        default,
+        deserialize_with = "crate::deserialize_present_nonnull",
+        skip_serializing_if = "::std::option::Option::is_none"
+    )]
+    pub net_class: ::std::option::Option<::std::string::String>,
+}
+///Design rules of one KiCad net class, as the project defines them.
+///
+/// <details><summary>JSON schema</summary>
+///
+/// ```json
+///{
+///  "description": "Design rules of one KiCad net class, as the project defines them.",
+///  "type": "object",
+///  "required": [
+///    "name"
+///  ],
+///  "properties": {
+///    "clearance_nm": {
+///      "$ref": "#/$defs/NonNegativeNm"
+///    },
+///    "diff_pair_gap_nm": {
+///      "$ref": "#/$defs/NonNegativeNm"
+///    },
+///    "diff_pair_width_nm": {
+///      "$ref": "#/$defs/NonNegativeNm"
+///    },
+///    "name": {
+///      "type": "string"
+///    },
+///    "track_width_nm": {
+///      "$ref": "#/$defs/NonNegativeNm"
+///    },
+///    "via_diameter_nm": {
+///      "$ref": "#/$defs/NonNegativeNm"
+///    },
+///    "via_drill_nm": {
+///      "$ref": "#/$defs/NonNegativeNm"
+///    }
+///  },
+///  "additionalProperties": false
+///}
+/// ```
+/// </details>
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct NetClass {
+    #[serde(
+        default,
+        deserialize_with = "crate::deserialize_present_nonnull",
+        skip_serializing_if = "::std::option::Option::is_none"
+    )]
+    pub clearance_nm: ::std::option::Option<NonNegativeNm>,
+    #[serde(
+        default,
+        deserialize_with = "crate::deserialize_present_nonnull",
+        skip_serializing_if = "::std::option::Option::is_none"
+    )]
+    pub diff_pair_gap_nm: ::std::option::Option<NonNegativeNm>,
+    #[serde(
+        default,
+        deserialize_with = "crate::deserialize_present_nonnull",
+        skip_serializing_if = "::std::option::Option::is_none"
+    )]
+    pub diff_pair_width_nm: ::std::option::Option<NonNegativeNm>,
+    pub name: ::std::string::String,
+    #[serde(
+        default,
+        deserialize_with = "crate::deserialize_present_nonnull",
+        skip_serializing_if = "::std::option::Option::is_none"
+    )]
+    pub track_width_nm: ::std::option::Option<NonNegativeNm>,
+    #[serde(
+        default,
+        deserialize_with = "crate::deserialize_present_nonnull",
+        skip_serializing_if = "::std::option::Option::is_none"
+    )]
+    pub via_diameter_nm: ::std::option::Option<NonNegativeNm>,
+    #[serde(
+        default,
+        deserialize_with = "crate::deserialize_present_nonnull",
+        skip_serializing_if = "::std::option::Option::is_none"
+    )]
+    pub via_drill_nm: ::std::option::Option<NonNegativeNm>,
+}
+/**Board-frame length in integer nanometres. The range matches KiCad's own
+32-bit internal-unit limit, so the packed encoding stores it losslessly.*/
+///
+/// <details><summary>JSON schema</summary>
+///
+/// ```json
+///{
+///  "description": "Board-frame length in integer nanometres. The range matches KiCad's own\n32-bit internal-unit limit, so the packed encoding stores it losslessly.",
+///  "type": "integer",
+///  "maximum": 2147483647.0,
+///  "minimum": -2147483648.0
+///}
+/// ```
+/// </details>
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(transparent)]
+pub struct Nm(pub i32);
+impl ::std::ops::Deref for Nm {
+    type Target = i32;
+    fn deref(&self) -> &i32 {
+        &self.0
+    }
+}
+impl ::std::convert::From<Nm> for i32 {
+    fn from(value: Nm) -> Self {
+        value.0
+    }
+}
+impl ::std::convert::From<i32> for Nm {
+    fn from(value: i32) -> Self {
+        Self(value)
+    }
+}
+impl ::std::str::FromStr for Nm {
+    type Err = <i32 as ::std::str::FromStr>::Err;
+    fn from_str(value: &str) -> ::std::result::Result<Self, Self::Err> {
+        Ok(Self(value.parse()?))
+    }
+}
+impl ::std::convert::TryFrom<&str> for Nm {
+    type Error = <i32 as ::std::str::FromStr>::Err;
+    fn try_from(value: &str) -> ::std::result::Result<Self, Self::Error> {
+        value.parse()
+    }
+}
+impl ::std::convert::TryFrom<String> for Nm {
+    type Error = <i32 as ::std::str::FromStr>::Err;
+    fn try_from(value: String) -> ::std::result::Result<Self, Self::Error> {
+        value.parse()
+    }
+}
+impl ::std::fmt::Display for Nm {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+///Axis-aligned bounds in the board frame, inclusive.
+///
+/// <details><summary>JSON schema</summary>
+///
+/// ```json
+///{
+///  "description": "Axis-aligned bounds in the board frame, inclusive.",
+///  "type": "object",
+///  "required": [
+///    "max_x_nm",
+///    "max_y_nm",
+///    "min_x_nm",
+///    "min_y_nm"
+///  ],
+///  "properties": {
+///    "max_x_nm": {
+///      "$ref": "#/$defs/Nm"
+///    },
+///    "max_y_nm": {
+///      "$ref": "#/$defs/Nm"
+///    },
+///    "min_x_nm": {
+///      "$ref": "#/$defs/Nm"
+///    },
+///    "min_y_nm": {
+///      "$ref": "#/$defs/Nm"
+///    }
+///  },
+///  "additionalProperties": false
+///}
+/// ```
+/// </details>
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct NmBounds {
+    pub max_x_nm: Nm,
+    pub max_y_nm: Nm,
+    pub min_x_nm: Nm,
+    pub min_y_nm: Nm,
+}
+///Point in KiCad's board frame: X to the right, Y down, in nanometres.
+///
+/// <details><summary>JSON schema</summary>
+///
+/// ```json
+///{
+///  "description": "Point in KiCad's board frame: X to the right, Y down, in nanometres.",
+///  "type": "array",
+///  "items": {
+///    "$ref": "#/$defs/Nm"
+///  },
+///  "maxItems": 2,
+///  "minItems": 2
+///}
+/// ```
+/// </details>
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(transparent)]
+pub struct NmPoint(pub [Nm; 2usize]);
+impl ::std::ops::Deref for NmPoint {
+    type Target = [Nm; 2usize];
+    fn deref(&self) -> &[Nm; 2usize] {
+        &self.0
+    }
+}
+impl ::std::convert::From<NmPoint> for [Nm; 2usize] {
+    fn from(value: NmPoint) -> Self {
+        value.0
+    }
+}
+impl ::std::convert::From<[Nm; 2usize]> for NmPoint {
+    fn from(value: [Nm; 2usize]) -> Self {
+        Self(value)
+    }
+}
+///Non-negative length in integer nanometres.
+///
+/// <details><summary>JSON schema</summary>
+///
+/// ```json
+///{
+///  "description": "Non-negative length in integer nanometres.",
+///  "type": "integer",
+///  "maximum": 2147483647.0,
+///  "minimum": 0.0
+///}
+/// ```
+/// </details>
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(transparent)]
+pub struct NonNegativeNm(pub i64);
+impl ::std::ops::Deref for NonNegativeNm {
+    type Target = i64;
+    fn deref(&self) -> &i64 {
+        &self.0
+    }
+}
+impl ::std::convert::From<NonNegativeNm> for i64 {
+    fn from(value: NonNegativeNm) -> Self {
+        value.0
+    }
+}
+impl ::std::convert::From<i64> for NonNegativeNm {
+    fn from(value: i64) -> Self {
+        Self(value)
+    }
+}
+impl ::std::str::FromStr for NonNegativeNm {
+    type Err = <i64 as ::std::str::FromStr>::Err;
+    fn from_str(value: &str) -> ::std::result::Result<Self, Self::Err> {
+        Ok(Self(value.parse()?))
+    }
+}
+impl ::std::convert::TryFrom<&str> for NonNegativeNm {
+    type Error = <i64 as ::std::str::FromStr>::Err;
+    fn try_from(value: &str) -> ::std::result::Result<Self, Self::Error> {
+        value.parse()
+    }
+}
+impl ::std::convert::TryFrom<String> for NonNegativeNm {
+    type Error = <i64 as ::std::str::FromStr>::Err;
+    fn try_from(value: String) -> ::std::result::Result<Self, Self::Error> {
+        value.parse()
+    }
+}
+impl ::std::fmt::Display for NonNegativeNm {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+///`PathCap`
+///
+/// <details><summary>JSON schema</summary>
+///
+/// ```json
+///{
+///  "type": "string",
+///  "enum": [
+///    "round",
+///    "flat"
+///  ]
+///}
+/// ```
+/// </details>
+#[derive(
+    ::serde::Deserialize,
+    ::serde::Serialize,
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd,
+)]
+pub enum PathCap {
+    #[serde(rename = "round")]
+    Round,
+    #[serde(rename = "flat")]
+    Flat,
+}
+impl ::std::fmt::Display for PathCap {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        match *self {
+            Self::Round => f.write_str("round"),
+            Self::Flat => f.write_str("flat"),
+        }
+    }
+}
+impl ::std::str::FromStr for PathCap {
+    type Err = self::error::ConversionError;
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+        match value {
+            "round" => Ok(Self::Round),
+            "flat" => Ok(Self::Flat),
+            _ => Err("invalid value".into()),
+        }
+    }
+}
+impl ::std::convert::TryFrom<&str> for PathCap {
+    type Error = self::error::ConversionError;
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+impl ::std::convert::TryFrom<&::std::string::String> for PathCap {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: &::std::string::String,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+impl ::std::convert::TryFrom<::std::string::String> for PathCap {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: ::std::string::String,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+///`PathJoin`
+///
+/// <details><summary>JSON schema</summary>
+///
+/// ```json
+///{
+///  "type": "string",
+///  "enum": [
+///    "round",
+///    "miter"
+///  ]
+///}
+/// ```
+/// </details>
+#[derive(
+    ::serde::Deserialize,
+    ::serde::Serialize,
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd,
+)]
+pub enum PathJoin {
+    #[serde(rename = "round")]
+    Round,
+    #[serde(rename = "miter")]
+    Miter,
+}
+impl ::std::fmt::Display for PathJoin {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        match *self {
+            Self::Round => f.write_str("round"),
+            Self::Miter => f.write_str("miter"),
+        }
+    }
+}
+impl ::std::str::FromStr for PathJoin {
+    type Err = self::error::ConversionError;
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+        match value {
+            "round" => Ok(Self::Round),
+            "miter" => Ok(Self::Miter),
+            _ => Err("invalid value".into()),
+        }
+    }
+}
+impl ::std::convert::TryFrom<&str> for PathJoin {
+    type Error = self::error::ConversionError;
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+impl ::std::convert::TryFrom<&::std::string::String> for PathJoin {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: &::std::string::String,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+impl ::std::convert::TryFrom<::std::string::String> for PathJoin {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: ::std::string::String,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+///`PathSegment`
+///
+/// <details><summary>JSON schema</summary>
+///
+/// ```json
+///{
+///  "oneOf": [
+///    {
+///      "$ref": "#/$defs/LineSegment"
+///    },
+///    {
+///      "$ref": "#/$defs/ArcSegment"
+///    }
+///  ]
+///}
+/// ```
+/// </details>
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(untagged)]
+pub enum PathSegment {
+    LineSegment(LineSegment),
+    ArcSegment(ArcSegment),
+}
+impl ::std::convert::From<LineSegment> for PathSegment {
+    fn from(value: LineSegment) -> Self {
+        Self::LineSegment(value)
+    }
+}
+impl ::std::convert::From<ArcSegment> for PathSegment {
+    fn from(value: ArcSegment) -> Self {
+        Self::ArcSegment(value)
+    }
+}
+///One analytic outer contour with optional hole contours.
+///
+/// <details><summary>JSON schema</summary>
+///
+/// ```json
+///{
+///  "description": "One analytic outer contour with optional hole contours.",
+///  "type": "object",
+///  "required": [
+///    "holes",
+///    "kind",
+///    "outer"
+///  ],
+///  "properties": {
+///    "holes": {
+///      "type": "array",
+///      "items": {
+///        "$ref": "#/$defs/Contour"
+///      }
+///    },
+///    "kind": {
+///      "type": "string",
+///      "const": "planar_region_2d"
+///    },
+///    "outer": {
+///      "$ref": "#/$defs/Contour"
+///    }
+///  },
+///  "additionalProperties": false
+///}
+/// ```
+/// </details>
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct PlanarRegion2d {
+    pub holes: ::std::vec::Vec<Contour>,
+    #[serde(
+        deserialize_with = "crate::materialization_contract::deserialize_planar_region_2d_kind"
+    )]
+    pub kind: ::std::string::String,
+    pub outer: Contour,
+}
+///KiCad's tri-state for a protection option: set, cleared, or left to the board default.
+///
+/// <details><summary>JSON schema</summary>
+///
+/// ```json
+///{
+///  "description": "KiCad's tri-state for a protection option: set, cleared, or left to the board default.",
+///  "type": "string",
+///  "enum": [
+///    "yes",
+///    "no",
+///    "unspecified"
+///  ]
+///}
+/// ```
+/// </details>
+#[derive(
+    ::serde::Deserialize,
+    ::serde::Serialize,
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd,
+)]
+pub enum ProtectionState {
+    #[serde(rename = "yes")]
+    Yes,
+    #[serde(rename = "no")]
+    No,
+    #[serde(rename = "unspecified")]
+    Unspecified,
+}
+impl ::std::fmt::Display for ProtectionState {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        match *self {
+            Self::Yes => f.write_str("yes"),
+            Self::No => f.write_str("no"),
+            Self::Unspecified => f.write_str("unspecified"),
+        }
+    }
+}
+impl ::std::str::FromStr for ProtectionState {
+    type Err = self::error::ConversionError;
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+        match value {
+            "yes" => Ok(Self::Yes),
+            "no" => Ok(Self::No),
+            "unspecified" => Ok(Self::Unspecified),
+            _ => Err("invalid value".into()),
+        }
+    }
+}
+impl ::std::convert::TryFrom<&str> for ProtectionState {
+    type Error = self::error::ConversionError;
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+impl ::std::convert::TryFrom<&::std::string::String> for ProtectionState {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: &::std::string::String,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+impl ::std::convert::TryFrom<::std::string::String> for ProtectionState {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: ::std::string::String,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+///`Rect2d`
+///
+/// <details><summary>JSON schema</summary>
+///
+/// ```json
+///{
+///  "type": "object",
+///  "required": [
+///    "center_nm",
+///    "height_nm",
+///    "kind",
+///    "width_nm"
+///  ],
+///  "properties": {
+///    "center_nm": {
+///      "$ref": "#/$defs/NmPoint"
+///    },
+///    "height_nm": {
+///      "$ref": "#/$defs/NonNegativeNm"
+///    },
+///    "kind": {
+///      "type": "string",
+///      "const": "rect_2d"
+///    },
+///    "width_nm": {
+///      "$ref": "#/$defs/NonNegativeNm"
+///    }
+///  },
+///  "additionalProperties": false
+///}
+/// ```
+/// </details>
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct Rect2d {
+    pub center_nm: NmPoint,
+    pub height_nm: NonNegativeNm,
+    #[serde(deserialize_with = "crate::materialization_contract::deserialize_rect_2d_kind")]
+    pub kind: ::std::string::String,
+    pub width_nm: NonNegativeNm,
+}
+///`RectCorner`
+///
+/// <details><summary>JSON schema</summary>
+///
+/// ```json
+///{
+///  "type": "string",
+///  "enum": [
+///    "top_left",
+///    "top_right",
+///    "bottom_left",
+///    "bottom_right"
+///  ]
+///}
+/// ```
+/// </details>
+#[derive(
+    ::serde::Deserialize,
+    ::serde::Serialize,
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd,
+)]
+pub enum RectCorner {
+    #[serde(rename = "top_left")]
+    TopLeft,
+    #[serde(rename = "top_right")]
+    TopRight,
+    #[serde(rename = "bottom_left")]
+    BottomLeft,
+    #[serde(rename = "bottom_right")]
+    BottomRight,
+}
+impl ::std::fmt::Display for RectCorner {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        match *self {
+            Self::TopLeft => f.write_str("top_left"),
+            Self::TopRight => f.write_str("top_right"),
+            Self::BottomLeft => f.write_str("bottom_left"),
+            Self::BottomRight => f.write_str("bottom_right"),
+        }
+    }
+}
+impl ::std::str::FromStr for RectCorner {
+    type Err = self::error::ConversionError;
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+        match value {
+            "top_left" => Ok(Self::TopLeft),
+            "top_right" => Ok(Self::TopRight),
+            "bottom_left" => Ok(Self::BottomLeft),
+            "bottom_right" => Ok(Self::BottomRight),
+            _ => Err("invalid value".into()),
+        }
+    }
+}
+impl ::std::convert::TryFrom<&str> for RectCorner {
+    type Error = self::error::ConversionError;
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+impl ::std::convert::TryFrom<&::std::string::String> for RectCorner {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: &::std::string::String,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+impl ::std::convert::TryFrom<::std::string::String> for RectCorner {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: ::std::string::String,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+///`RoundedRect2d`
+///
+/// <details><summary>JSON schema</summary>
+///
+/// ```json
+///{
+///  "type": "object",
+///  "required": [
+///    "center_nm",
+///    "height_nm",
+///    "kind",
+///    "radius_nm",
+///    "width_nm"
+///  ],
+///  "properties": {
+///    "center_nm": {
+///      "$ref": "#/$defs/NmPoint"
+///    },
+///    "height_nm": {
+///      "$ref": "#/$defs/NonNegativeNm"
+///    },
+///    "kind": {
+///      "type": "string",
+///      "const": "rounded_rect_2d"
+///    },
+///    "radius_nm": {
+///      "$ref": "#/$defs/NonNegativeNm"
+///    },
+///    "width_nm": {
+///      "$ref": "#/$defs/NonNegativeNm"
+///    }
+///  },
+///  "additionalProperties": false
+///}
+/// ```
+/// </details>
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct RoundedRect2d {
+    pub center_nm: NmPoint,
+    pub height_nm: NonNegativeNm,
+    #[serde(
+        deserialize_with = "crate::materialization_contract::deserialize_rounded_rect_2d_kind"
+    )]
+    pub kind: ::std::string::String,
+    pub radius_nm: NonNegativeNm,
+    pub width_nm: NonNegativeNm,
+}
+///Closed analytic shape vocabulary. Lowering is a consumer operation.
+///
+/// <details><summary>JSON schema</summary>
+///
+/// ```json
+///{
+///  "description": "Closed analytic shape vocabulary. Lowering is a consumer operation.",
+///  "oneOf": [
+///    {
+///      "$ref": "#/$defs/Disk2d"
+///    },
+///    {
+///      "$ref": "#/$defs/Rect2d"
+///    },
+///    {
+///      "$ref": "#/$defs/RoundedRect2d"
+///    },
+///    {
+///      "$ref": "#/$defs/ChamferedRect2d"
+///    },
+///    {
+///      "$ref": "#/$defs/Trapezoid2d"
+///    },
+///    {
+///      "$ref": "#/$defs/Capsule2d"
+///    },
+///    {
+///      "$ref": "#/$defs/Annulus2d"
+///    },
+///    {
+///      "$ref": "#/$defs/SweptPath2d"
+///    },
+///    {
+///      "$ref": "#/$defs/PlanarRegion2d"
+///    }
+///  ]
+///}
+/// ```
+/// </details>
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(untagged)]
+pub enum Shape2d {
+    Disk2d(Disk2d),
+    Rect2d(Rect2d),
+    RoundedRect2d(RoundedRect2d),
+    ChamferedRect2d(ChamferedRect2d),
+    Trapezoid2d(Trapezoid2d),
+    Capsule2d(Capsule2d),
+    Annulus2d(Annulus2d),
+    SweptPath2d(SweptPath2d),
+    PlanarRegion2d(PlanarRegion2d),
+}
+impl ::std::convert::From<Disk2d> for Shape2d {
+    fn from(value: Disk2d) -> Self {
+        Self::Disk2d(value)
+    }
+}
+impl ::std::convert::From<Rect2d> for Shape2d {
+    fn from(value: Rect2d) -> Self {
+        Self::Rect2d(value)
+    }
+}
+impl ::std::convert::From<RoundedRect2d> for Shape2d {
+    fn from(value: RoundedRect2d) -> Self {
+        Self::RoundedRect2d(value)
+    }
+}
+impl ::std::convert::From<ChamferedRect2d> for Shape2d {
+    fn from(value: ChamferedRect2d) -> Self {
+        Self::ChamferedRect2d(value)
+    }
+}
+impl ::std::convert::From<Trapezoid2d> for Shape2d {
+    fn from(value: Trapezoid2d) -> Self {
+        Self::Trapezoid2d(value)
+    }
+}
+impl ::std::convert::From<Capsule2d> for Shape2d {
+    fn from(value: Capsule2d) -> Self {
+        Self::Capsule2d(value)
+    }
+}
+impl ::std::convert::From<Annulus2d> for Shape2d {
+    fn from(value: Annulus2d) -> Self {
+        Self::Annulus2d(value)
+    }
+}
+impl ::std::convert::From<SweptPath2d> for Shape2d {
+    fn from(value: SweptPath2d) -> Self {
+        Self::SweptPath2d(value)
+    }
+}
+impl ::std::convert::From<PlanarRegion2d> for Shape2d {
+    fn from(value: PlanarRegion2d) -> Self {
+        Self::PlanarRegion2d(value)
+    }
+}
+///`SideProtection`
+///
+/// <details><summary>JSON schema</summary>
+///
+/// ```json
+///{
+///  "type": "object",
+///  "required": [
+///    "covered",
+///    "plugged",
+///    "tented"
+///  ],
+///  "properties": {
+///    "covered": {
+///      "$ref": "#/$defs/ProtectionState"
+///    },
+///    "plugged": {
+///      "$ref": "#/$defs/ProtectionState"
+///    },
+///    "tented": {
+///      "$ref": "#/$defs/ProtectionState"
+///    }
+///  },
+///  "additionalProperties": false
+///}
+/// ```
+/// </details>
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct SideProtection {
+    pub covered: ProtectionState,
+    pub plugged: ProtectionState,
+    pub tented: ProtectionState,
+}
+///`SliceRole`
+///
+/// <details><summary>JSON schema</summary>
+///
+/// ```json
+///{
+///  "type": "string",
+///  "enum": [
+///    "conductor",
+///    "dielectric",
+///    "solder_mask",
+///    "paste",
+///    "silkscreen"
+///  ]
+///}
+/// ```
+/// </details>
+#[derive(
+    ::serde::Deserialize,
+    ::serde::Serialize,
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd,
+)]
+pub enum SliceRole {
+    #[serde(rename = "conductor")]
+    Conductor,
+    #[serde(rename = "dielectric")]
+    Dielectric,
+    #[serde(rename = "solder_mask")]
+    SolderMask,
+    #[serde(rename = "paste")]
+    Paste,
+    #[serde(rename = "silkscreen")]
+    Silkscreen,
+}
+impl ::std::fmt::Display for SliceRole {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        match *self {
+            Self::Conductor => f.write_str("conductor"),
+            Self::Dielectric => f.write_str("dielectric"),
+            Self::SolderMask => f.write_str("solder_mask"),
+            Self::Paste => f.write_str("paste"),
+            Self::Silkscreen => f.write_str("silkscreen"),
+        }
+    }
+}
+impl ::std::str::FromStr for SliceRole {
+    type Err = self::error::ConversionError;
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+        match value {
+            "conductor" => Ok(Self::Conductor),
+            "dielectric" => Ok(Self::Dielectric),
+            "solder_mask" => Ok(Self::SolderMask),
+            "paste" => Ok(Self::Paste),
+            "silkscreen" => Ok(Self::Silkscreen),
+            _ => Err("invalid value".into()),
+        }
+    }
+}
+impl ::std::convert::TryFrom<&str> for SliceRole {
+    type Error = self::error::ConversionError;
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+impl ::std::convert::TryFrom<&::std::string::String> for SliceRole {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: &::std::string::String,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+impl ::std::convert::TryFrom<::std::string::String> for SliceRole {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: ::std::string::String,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+///`Stack`
+///
+/// <details><summary>JSON schema</summary>
+///
+/// ```json
+///{
+///  "type": "object",
+///  "required": [
+///    "slices"
+///  ],
+///  "properties": {
+///    "board_thickness_nm": {
+///      "$ref": "#/$defs/NonNegativeNm"
+///    },
+///    "copper_finish": {
+///      "type": "string"
+///    },
+///    "slices": {
+///      "type": "array",
+///      "items": {
+///        "$ref": "#/$defs/StackSlice"
+///      }
+///    }
+///  },
+///  "additionalProperties": false
+///}
+/// ```
+/// </details>
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct Stack {
+    #[serde(
+        default,
+        deserialize_with = "crate::deserialize_present_nonnull",
+        skip_serializing_if = "::std::option::Option::is_none"
+    )]
+    pub board_thickness_nm: ::std::option::Option<NonNegativeNm>,
+    #[serde(
+        default,
+        deserialize_with = "crate::deserialize_present_nonnull",
+        skip_serializing_if = "::std::option::Option::is_none"
+    )]
+    pub copper_finish: ::std::option::Option<::std::string::String>,
+    pub slices: ::std::vec::Vec<StackSlice>,
+}
+/**One physical slice of the rigid board stack. `order` is zero at the front
+outermost slice and increases toward the back. Z positions are derived
+from the ordered thicknesses and are never stored. Absent values are
+unknown, never defaulted.*/
+///
+/// <details><summary>JSON schema</summary>
+///
+/// ```json
+///{
+///  "description": "One physical slice of the rigid board stack. `order` is zero at the front\noutermost slice and increases toward the back. Z positions are derived\nfrom the ordered thicknesses and are never stored. Absent values are\nunknown, never defaulted.",
+///  "type": "object",
+///  "required": [
+///    "key",
+///    "order",
+///    "role"
+///  ],
+///  "properties": {
+///    "key": {
+///      "type": "string"
+///    },
+///    "kicad_layer": {
+///      "type": "string"
+///    },
+///    "loss_tangent": {
+///      "type": "number"
+///    },
+///    "material_name": {
+///      "type": "string"
+///    },
+///    "order": {
+///      "type": "integer",
+///      "maximum": 4294967295.0,
+///      "minimum": 0.0
+///    },
+///    "relative_permittivity": {
+///      "type": "number"
+///    },
+///    "role": {
+///      "$ref": "#/$defs/SliceRole"
+///    },
+///    "side": {
+///      "$ref": "#/$defs/BoardSide"
+///    },
+///    "thickness_nm": {
+///      "$ref": "#/$defs/NonNegativeNm"
+///    }
+///  },
+///  "additionalProperties": false
+///}
+/// ```
+/// </details>
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct StackSlice {
+    pub key: ::std::string::String,
+    #[serde(
+        default,
+        deserialize_with = "crate::deserialize_present_nonnull",
+        skip_serializing_if = "::std::option::Option::is_none"
+    )]
+    pub kicad_layer: ::std::option::Option<::std::string::String>,
+    #[serde(
+        default,
+        deserialize_with = "crate::deserialize_present_nonnull",
+        skip_serializing_if = "::std::option::Option::is_none"
+    )]
+    pub loss_tangent: ::std::option::Option<f64>,
+    #[serde(
+        default,
+        deserialize_with = "crate::deserialize_present_nonnull",
+        skip_serializing_if = "::std::option::Option::is_none"
+    )]
+    pub material_name: ::std::option::Option<::std::string::String>,
+    pub order: u32,
+    #[serde(
+        default,
+        deserialize_with = "crate::deserialize_present_nonnull",
+        skip_serializing_if = "::std::option::Option::is_none"
+    )]
+    pub relative_permittivity: ::std::option::Option<f64>,
+    pub role: SliceRole,
+    #[serde(
+        default,
+        deserialize_with = "crate::deserialize_present_nonnull",
+        skip_serializing_if = "::std::option::Option::is_none"
+    )]
+    pub side: ::std::option::Option<BoardSide>,
+    #[serde(
+        default,
+        deserialize_with = "crate::deserialize_present_nonnull",
+        skip_serializing_if = "::std::option::Option::is_none"
+    )]
+    pub thickness_nm: ::std::option::Option<NonNegativeNm>,
+}
+///`SurfaceMaterial`
+///
+/// <details><summary>JSON schema</summary>
+///
+/// ```json
+///{
+///  "type": "string",
+///  "enum": [
+///    "copper",
+///    "dielectric",
+///    "solder_mask",
+///    "paste",
+///    "silkscreen"
+///  ]
+///}
+/// ```
+/// </details>
+#[derive(
+    ::serde::Deserialize,
+    ::serde::Serialize,
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd,
+)]
+pub enum SurfaceMaterial {
+    #[serde(rename = "copper")]
+    Copper,
+    #[serde(rename = "dielectric")]
+    Dielectric,
+    #[serde(rename = "solder_mask")]
+    SolderMask,
+    #[serde(rename = "paste")]
+    Paste,
+    #[serde(rename = "silkscreen")]
+    Silkscreen,
+}
+impl ::std::fmt::Display for SurfaceMaterial {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        match *self {
+            Self::Copper => f.write_str("copper"),
+            Self::Dielectric => f.write_str("dielectric"),
+            Self::SolderMask => f.write_str("solder_mask"),
+            Self::Paste => f.write_str("paste"),
+            Self::Silkscreen => f.write_str("silkscreen"),
+        }
+    }
+}
+impl ::std::str::FromStr for SurfaceMaterial {
+    type Err = self::error::ConversionError;
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+        match value {
+            "copper" => Ok(Self::Copper),
+            "dielectric" => Ok(Self::Dielectric),
+            "solder_mask" => Ok(Self::SolderMask),
+            "paste" => Ok(Self::Paste),
+            "silkscreen" => Ok(Self::Silkscreen),
+            _ => Err("invalid value".into()),
+        }
+    }
+}
+impl ::std::convert::TryFrom<&str> for SurfaceMaterial {
+    type Error = self::error::ConversionError;
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+impl ::std::convert::TryFrom<&::std::string::String> for SurfaceMaterial {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: &::std::string::String,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+impl ::std::convert::TryFrom<::std::string::String> for SurfaceMaterial {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: ::std::string::String,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+/**Add or remove one shape of material on one slice. Conductive material
+always carries `net_key`; operations on different nets are never merged.*/
+///
+/// <details><summary>JSON schema</summary>
+///
+/// ```json
+///{
+///  "description": "Add or remove one shape of material on one slice. Conductive material\nalways carries `net_key`; operations on different nets are never merged.",
+///  "type": "object",
+///  "required": [
+///    "action",
+///    "affine",
+///    "bounds",
+///    "index",
+///    "kind",
+///    "material",
+///    "shape",
+///    "slice_key"
+///  ],
+///  "properties": {
+///    "action": {
+///      "$ref": "#/$defs/MaterialAction"
+///    },
+///    "affine": {
+///      "$ref": "#/$defs/Affine2D"
+///    },
+///    "bounds": {
+///      "$ref": "#/$defs/NmBounds"
+///    },
+///    "index": {
+///      "type": "integer",
+///      "maximum": 4294967295.0,
+///      "minimum": 0.0
+///    },
+///    "kind": {
+///      "type": "string",
+///      "const": "surface"
+///    },
+///    "material": {
+///      "$ref": "#/$defs/SurfaceMaterial"
+///    },
+///    "net_key": {
+///      "type": "string"
+///    },
+///    "shape": {
+///      "$ref": "#/$defs/Shape2d"
+///    },
+///    "slice_key": {
+///      "type": "string"
+///    }
+///  },
+///  "additionalProperties": false
+///}
+/// ```
+/// </details>
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct SurfaceOperation {
+    pub action: MaterialAction,
+    pub affine: Affine2D,
+    pub bounds: NmBounds,
+    pub index: u32,
+    #[serde(
+        deserialize_with = "crate::materialization_contract::deserialize_surface_operation_kind"
+    )]
+    pub kind: ::std::string::String,
+    pub material: SurfaceMaterial,
+    #[serde(
+        default,
+        deserialize_with = "crate::deserialize_present_nonnull",
+        skip_serializing_if = "::std::option::Option::is_none"
+    )]
+    pub net_key: ::std::option::Option<::std::string::String>,
+    pub shape: Shape2d,
+    pub slice_key: ::std::string::String,
+}
+///Open centreline of line and arc segments swept by a constant width.
+///
+/// <details><summary>JSON schema</summary>
+///
+/// ```json
+///{
+///  "description": "Open centreline of line and arc segments swept by a constant width.",
+///  "type": "object",
+///  "required": [
+///    "cap",
+///    "join",
+///    "kind",
+///    "segments",
+///    "start_nm",
+///    "width_nm"
+///  ],
+///  "properties": {
+///    "cap": {
+///      "$ref": "#/$defs/PathCap"
+///    },
+///    "join": {
+///      "$ref": "#/$defs/PathJoin"
+///    },
+///    "kind": {
+///      "type": "string",
+///      "const": "swept_path_2d"
+///    },
+///    "segments": {
+///      "type": "array",
+///      "items": {
+///        "$ref": "#/$defs/PathSegment"
+///      },
+///      "minItems": 1
+///    },
+///    "start_nm": {
+///      "$ref": "#/$defs/NmPoint"
+///    },
+///    "width_nm": {
+///      "$ref": "#/$defs/NonNegativeNm"
+///    }
+///  },
+///  "additionalProperties": false
+///}
+/// ```
+/// </details>
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct SweptPath2d {
+    pub cap: PathCap,
+    pub join: PathJoin,
+    #[serde(deserialize_with = "crate::materialization_contract::deserialize_swept_path_2d_kind")]
+    pub kind: ::std::string::String,
+    pub segments: ::std::vec::Vec<PathSegment>,
+    pub start_nm: NmPoint,
+    pub width_nm: NonNegativeNm,
+}
+///KiCad trapezoid: a rectangle whose opposite edges are widened or narrowed by the deltas.
+///
+/// <details><summary>JSON schema</summary>
+///
+/// ```json
+///{
+///  "description": "KiCad trapezoid: a rectangle whose opposite edges are widened or narrowed by the deltas.",
+///  "type": "object",
+///  "required": [
+///    "center_nm",
+///    "delta_x_nm",
+///    "delta_y_nm",
+///    "height_nm",
+///    "kind",
+///    "width_nm"
+///  ],
+///  "properties": {
+///    "center_nm": {
+///      "$ref": "#/$defs/NmPoint"
+///    },
+///    "delta_x_nm": {
+///      "$ref": "#/$defs/Nm"
+///    },
+///    "delta_y_nm": {
+///      "$ref": "#/$defs/Nm"
+///    },
+///    "height_nm": {
+///      "$ref": "#/$defs/NonNegativeNm"
+///    },
+///    "kind": {
+///      "type": "string",
+///      "const": "trapezoid_2d"
+///    },
+///    "width_nm": {
+///      "$ref": "#/$defs/NonNegativeNm"
+///    }
+///  },
+///  "additionalProperties": false
+///}
+/// ```
+/// </details>
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct Trapezoid2d {
+    pub center_nm: NmPoint,
+    pub delta_x_nm: Nm,
+    pub delta_y_nm: Nm,
+    pub height_nm: NonNegativeNm,
+    #[serde(deserialize_with = "crate::materialization_contract::deserialize_trapezoid_2d_kind")]
+    pub kind: ::std::string::String,
+    pub width_nm: NonNegativeNm,
+}

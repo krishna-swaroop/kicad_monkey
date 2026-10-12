@@ -11,6 +11,7 @@ mod compiled_graph_contract;
 mod font_bundle_contract;
 mod font_text_contract;
 pub mod generated;
+pub mod materialization_contract;
 mod native_transport_contract;
 mod schematic_plot_contract;
 mod source_bundle_contract;

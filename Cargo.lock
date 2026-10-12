@@ -602,6 +602,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "kicad-monkey-materialization-pack"
+version = "2026.9.7"
+dependencies = [
+ "kicad-monkey-contracts",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "kicad-monkey-native"
 version = "2026.9.7"
 dependencies = [

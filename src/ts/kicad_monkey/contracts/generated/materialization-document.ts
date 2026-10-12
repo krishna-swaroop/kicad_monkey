@@ -1,0 +1,391 @@
+/** Generated from KiCad Monkey TypeSpec JSON Schema. Do not edit. */
+
+/**
+ * Selectable products. Every operation belongs to exactly one product. The
+ * board profile has no product of its own: it is the add operation of every
+ * dielectric and solder-mask slice, with cutouts subtracted there.
+ */
+export type MaterialProduct = "copper" | "holes" | "dielectric" | "solder_mask" | "paste" | "silkscreen" | "components";
+/**
+ * Board-frame length in integer nanometres. The range matches KiCad's own
+ * 32-bit internal-unit limit, so the packed encoding stores it losslessly.
+ */
+export type Nm = number;
+/**
+ * Non-negative length in integer nanometres.
+ */
+export type NonNegativeNm = number;
+export type SliceRole = "conductor" | "dielectric" | "solder_mask" | "paste" | "silkscreen";
+export type BoardSide = "front" | "back";
+export type MaterialOperation = SurfaceOperation | HoleOperation;
+export type MaterialAction = "add" | "subtract";
+export type SurfaceMaterial = "copper" | "dielectric" | "solder_mask" | "paste" | "silkscreen";
+/**
+ * Closed analytic shape vocabulary. Lowering is a consumer operation.
+ */
+export type Shape2D =
+  | Disk2D
+  | Rect2D
+  | RoundedRect2D
+  | ChamferedRect2D
+  | Trapezoid2D
+  | Capsule2D
+  | Annulus2D
+  | SweptPath2D
+  | PlanarRegion2D;
+/**
+ * Point in KiCad's board frame: X to the right, Y down, in nanometres.
+ *
+ * @minItems 2
+ * @maxItems 2
+ */
+export type NmPoint = [Nm, Nm];
+export type RectCorner = "top_left" | "top_right" | "bottom_left" | "bottom_right";
+export type PathSegment = LineSegment | ArcSegment;
+export type PathCap = "round" | "flat";
+export type PathJoin = "round" | "miter";
+export type HolePlating = "plated" | "unplated";
+/**
+ * KiCad's tri-state for a protection option: set, cleared, or left to the board default.
+ */
+export type ProtectionState = "yes" | "no" | "unspecified";
+export type BindingSourceKind =
+  | "track"
+  | "track_arc"
+  | "via"
+  | "pad"
+  | "zone_fill"
+  | "board_graphic"
+  | "footprint_graphic"
+  | "board_text"
+  | "footprint_text"
+  | "profile"
+  | "derived";
+export type DiagnosticSeverity = "info" | "warning" | "error";
+
+/**
+ * Analytic materialization of one KiCad board. This JSON form is the
+ * deterministic debug view; the packed columnar encoding is canonical.
+ */
+export interface MaterializationDocumentA0 {
+  schema: "kicad_monkey.materialization.a0";
+  type: "kicad_monkey.materialization.document";
+  version: "a0";
+  producer: MaterializationProducer;
+  source: MaterializationSource;
+  coordinate_system: MaterializationCoordinateSystem;
+  scope: MaterializationScope;
+  stack: Stack;
+  nets: Net[];
+  net_classes: NetClass[];
+  diff_pairs: DiffPair[];
+  components: Component[];
+  operations: MaterialOperation[];
+  binding: BindingEntry[];
+  chunks: ChunkEntry[];
+  diagnostics: MaterializationDiagnostic[];
+}
+export interface MaterializationProducer {
+  name: string;
+  version: string;
+}
+export interface MaterializationSource {
+  sha256: string;
+  source_bytes: string;
+}
+export interface MaterializationCoordinateSystem {
+  unit: "nm";
+  x_axis: "board_right";
+  y_axis: "board_down";
+}
+export interface MaterializationScope {
+  products: MaterialProduct[];
+  /**
+   * Absent means every slice.
+   */
+  slice_keys?: string[];
+  /**
+   * Absent means every net.
+   */
+  net_keys?: string[];
+  region?: NmBounds;
+  tile_size_nm: NonNegativeNm;
+  /**
+   * True only when every product, slice, and net was materialized without a region.
+   */
+  complete: boolean;
+}
+/**
+ * Axis-aligned bounds in the board frame, inclusive.
+ */
+export interface NmBounds {
+  min_x_nm: Nm;
+  min_y_nm: Nm;
+  max_x_nm: Nm;
+  max_y_nm: Nm;
+}
+export interface Stack {
+  slices: StackSlice[];
+  board_thickness_nm?: NonNegativeNm;
+  copper_finish?: string;
+}
+/**
+ * One physical slice of the rigid board stack. `order` is zero at the front
+ * outermost slice and increases toward the back. Z positions are derived
+ * from the ordered thicknesses and are never stored. Absent values are
+ * unknown, never defaulted.
+ */
+export interface StackSlice {
+  key: string;
+  role: SliceRole;
+  order: number;
+  kicad_layer?: string;
+  side?: BoardSide;
+  thickness_nm?: NonNegativeNm;
+  material_name?: string;
+  relative_permittivity?: number;
+  loss_tangent?: number;
+}
+/**
+ * Resolved electrical net. The empty key is the no-net assignment.
+ */
+export interface Net {
+  key: string;
+  name: string;
+  net_class?: string;
+}
+/**
+ * Design rules of one KiCad net class, as the project defines them.
+ */
+export interface NetClass {
+  name: string;
+  track_width_nm?: NonNegativeNm;
+  clearance_nm?: NonNegativeNm;
+  diff_pair_width_nm?: NonNegativeNm;
+  diff_pair_gap_nm?: NonNegativeNm;
+  via_diameter_nm?: NonNegativeNm;
+  via_drill_nm?: NonNegativeNm;
+}
+export interface DiffPair {
+  base_name: string;
+  positive_net_key: string;
+  negative_net_key: string;
+}
+export interface Component {
+  refdes: string;
+  footprint: string;
+  side: BoardSide;
+  affine: Affine2D;
+  source_uid: string;
+  body_bounds?: NmBounds1;
+  body_height_nm?: NonNegativeNm;
+}
+/**
+ * One fully composed local-to-board transform. A shape's local coordinates
+ * map to board coordinates as x' = m11*x + m12*y + tx_nm and
+ * y' = m21*x + m22*y + ty_nm. Reflection, rotation, and non-uniform scale are
+ * ordinary cases of the same matrix.
+ */
+export interface Affine2D {
+  m11: number;
+  m12: number;
+  m21: number;
+  m22: number;
+  tx_nm: Nm;
+  ty_nm: Nm;
+}
+/**
+ * Axis-aligned bounds in the board frame, inclusive.
+ */
+export interface NmBounds1 {
+  min_x_nm: Nm;
+  min_y_nm: Nm;
+  max_x_nm: Nm;
+  max_y_nm: Nm;
+}
+/**
+ * Add or remove one shape of material on one slice. Conductive material
+ * always carries `net_key`; operations on different nets are never merged.
+ */
+export interface SurfaceOperation {
+  kind: "surface";
+  index: number;
+  action: MaterialAction;
+  material: SurfaceMaterial;
+  slice_key: string;
+  net_key?: string;
+  shape: Shape2D;
+  affine: Affine2D;
+  bounds: NmBounds;
+}
+export interface Disk2D {
+  kind: "disk_2d";
+  center_nm: NmPoint;
+  radius_nm: NonNegativeNm;
+}
+export interface Rect2D {
+  kind: "rect_2d";
+  center_nm: NmPoint;
+  width_nm: NonNegativeNm;
+  height_nm: NonNegativeNm;
+}
+export interface RoundedRect2D {
+  kind: "rounded_rect_2d";
+  center_nm: NmPoint;
+  width_nm: NonNegativeNm;
+  height_nm: NonNegativeNm;
+  radius_nm: NonNegativeNm;
+}
+/**
+ * Rectangle with the listed corners chamfered; unlisted corners keep `radius_nm`.
+ */
+export interface ChamferedRect2D {
+  kind: "chamfered_rect_2d";
+  center_nm: NmPoint;
+  width_nm: NonNegativeNm;
+  height_nm: NonNegativeNm;
+  chamfer_nm: NonNegativeNm;
+  chamfered_corners: RectCorner[];
+  radius_nm: NonNegativeNm;
+}
+/**
+ * KiCad trapezoid: a rectangle whose opposite edges are widened or narrowed by the deltas.
+ */
+export interface Trapezoid2D {
+  kind: "trapezoid_2d";
+  center_nm: NmPoint;
+  width_nm: NonNegativeNm;
+  height_nm: NonNegativeNm;
+  delta_x_nm: Nm;
+  delta_y_nm: Nm;
+}
+/**
+ * Stadium between two centres with a common radius.
+ */
+export interface Capsule2D {
+  kind: "capsule_2d";
+  start_nm: NmPoint;
+  end_nm: NmPoint;
+  radius_nm: NonNegativeNm;
+}
+export interface Annulus2D {
+  kind: "annulus_2d";
+  center_nm: NmPoint;
+  outer_radius_nm: NonNegativeNm;
+  inner_radius_nm: NonNegativeNm;
+}
+/**
+ * Open centreline of line and arc segments swept by a constant width.
+ */
+export interface SweptPath2D {
+  kind: "swept_path_2d";
+  start_nm: NmPoint;
+  /**
+   * @minItems 1
+   */
+  segments: [PathSegment, ...PathSegment[]];
+  width_nm: NonNegativeNm;
+  cap: PathCap;
+  join: PathJoin;
+}
+/**
+ * Straight path segment to `end_nm`.
+ */
+export interface LineSegment {
+  kind: "line";
+  end_nm: NmPoint;
+}
+/**
+ * Circular arc segment through `mid_nm` to `end_nm`, the form KiCad stores.
+ */
+export interface ArcSegment {
+  kind: "arc";
+  mid_nm: NmPoint;
+  end_nm: NmPoint;
+}
+/**
+ * One analytic outer contour with optional hole contours.
+ */
+export interface PlanarRegion2D {
+  kind: "planar_region_2d";
+  outer: Contour;
+  holes: Contour[];
+}
+/**
+ * Closed contour of line and arc segments. The last segment returns to `start_nm`.
+ */
+export interface Contour {
+  start_nm: NmPoint;
+  /**
+   * @minItems 1
+   */
+  segments: [PathSegment, ...PathSegment[]];
+}
+/**
+ * Drilled or milled hole spanning `start_slice_key` to `end_slice_key` inclusive.
+ */
+export interface HoleOperation {
+  kind: "hole";
+  index: number;
+  shape: Shape2D;
+  affine: Affine2D;
+  plating: HolePlating;
+  start_slice_key: string;
+  end_slice_key: string;
+  net_key?: string;
+  plating_thickness_nm?: NonNegativeNm;
+  protection?: HoleProtection;
+  backdrills: Backdrill[];
+  bounds: NmBounds;
+}
+export interface HoleProtection {
+  front: SideProtection;
+  back: SideProtection;
+  filled: ProtectionState;
+  capped: ProtectionState;
+}
+export interface SideProtection {
+  tented: ProtectionState;
+  covered: ProtectionState;
+  plugged: ProtectionState;
+}
+/**
+ * Controlled-depth removal of barrel plating from one side.
+ */
+export interface Backdrill {
+  side: BoardSide;
+  diameter_nm?: NonNegativeNm;
+  until_slice_key?: string;
+}
+/**
+ * Links one operation to the KiCad object that produced it. Required for
+ * simulation and picking; geometry consumers may ignore it.
+ */
+export interface BindingEntry {
+  operation_index: number;
+  source_kind: BindingSourceKind;
+  source_uid: string;
+  refdes?: string;
+  pad_number?: string;
+  net_key?: string;
+}
+/**
+ * Operations of one (slice, tile) occupy a contiguous index range. An
+ * operation belongs to the tile containing the centre of its bounds; the
+ * chunk bounds cover every operation in it.
+ */
+export interface ChunkEntry {
+  slice_key: string;
+  tile_x: number;
+  tile_y: number;
+  bounds: NmBounds;
+  net_keys: string[];
+  first_operation_index: number;
+  operation_count: number;
+}
+export interface MaterializationDiagnostic {
+  severity: DiagnosticSeverity;
+  code: string;
+  message: string;
+  source_uid?: string;
+}

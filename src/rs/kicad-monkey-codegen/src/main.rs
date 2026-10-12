@@ -12,8 +12,11 @@ use std::process::{Command, Stdio};
 use typify::{TypeSpace, TypeSpaceSettings};
 
 mod config_projection;
+mod materialization_projection;
 
-const SCHEMAS: [(&str, &str); 40] = [
+use materialization_projection::{project_materialization_kinds, validate_materialization_kinds};
+
+const SCHEMAS: [(&str, &str); 42] = [
     ("BoardPlotDocument.json", "board_plot_document.rs"),
     ("BoardPlotRequest.json", "board_plot_request.rs"),
     ("BoardPlotResult.json", "board_plot_result.rs"),
@@ -81,6 +84,11 @@ const SCHEMAS: [(&str, &str); 40] = [
     ),
     ("NativeSvgRenderResult.json", "native_svg_render_result.rs"),
     ("NativeError.json", "native_error.rs"),
+    ("MaterializationRequest.json", "materialization_request.rs"),
+    (
+        "MaterializationDocument.json",
+        "materialization_document.rs",
+    ),
 ];
 
 const PLOTTER_OPERATION_KINDS: [(&str, &str, &str); 14] = [
@@ -592,6 +600,9 @@ fn flatten_board_footprint_operation_extensions(
 }
 
 fn validate_plotter_operation_kinds(schema_name: &str, schema: &Value) -> Result<()> {
+    if schema_name == "MaterializationDocument.json" {
+        return validate_materialization_kinds(schema_name, schema);
+    }
     if !matches!(
         schema_name,
         "BoardPlotDocument.json"
@@ -638,7 +649,7 @@ fn validate_plotter_operation_kinds(schema_name: &str, schema: &Value) -> Result
     Ok(())
 }
 
-fn validate_operation_union(
+pub(crate) fn validate_operation_union(
     schema_name: &str,
     schema: &Value,
     union: &str,
@@ -760,6 +771,7 @@ fn project_generated_presence(
         projected = project_schematic_junction_color(projected)?;
         projected = project_schematic_segment_layers(projected)?;
     }
+    projected = project_materialization_kinds(schema_name, projected)?;
     projected = project_schema_presence(schema_name, published_schema, projected)?;
     // Presence and deterministic-map substitutions can cross rustfmt's line-width
     // boundary, so normalize the fully projected source as the final step.
@@ -815,6 +827,8 @@ fn uses_strict_presence_projection(schema_name: &str) -> bool {
             | "SchematicPlotDocument.json"
             | "SchematicPlotRequest.json"
             | "SchematicPlotResult.json"
+            | "MaterializationRequest.json"
+            | "MaterializationDocument.json"
     )
 }
 
@@ -1161,7 +1175,7 @@ fn project_schematic_record_string(source: String) -> Result<String> {
     ))
 }
 
-fn project_kind_deserializer(
+pub(crate) fn project_kind_deserializer(
     mut source: String,
     structure: &str,
     deserializer: &str,
@@ -1410,6 +1424,9 @@ fn promote_disjoint_record_unions(schema: &mut Value) {
         "/$defs/BoardPlotRecord",
         "/$defs/BoardFootprintOperation",
         "/$defs/SchematicPlotRecord",
+        "/$defs/Shape2d",
+        "/$defs/PathSegment",
+        "/$defs/MaterialOperation",
     ] {
         if let Some(record) = schema.pointer_mut(pointer).and_then(Value::as_object_mut)
             && let Some(members) = record.remove("anyOf")

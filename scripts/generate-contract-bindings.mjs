@@ -52,6 +52,8 @@ const roots = [
   ["NativeSvgRenderRequest.json", "NativeSVGRenderRequestA0", "native-svg-render-request.ts"],
   ["NativeSvgRenderResult.json", "NativeSVGRenderResultA0", "native-svg-render-result.ts"],
   ["NativeError.json", "NativeErrorA0", "native-error.ts"],
+  ["MaterializationRequest.json", "MaterializationRequestA0", "materialization-request.ts"],
+  ["MaterializationDocument.json", "MaterializationDocumentA0", "materialization-document.ts"],
 ];
 const schemas = new Map();
 for (const [file] of roots) {
