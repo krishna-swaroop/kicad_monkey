@@ -29,15 +29,104 @@ fn line(end: NmPoint) -> PathSegment {
     })
 }
 
-pub(crate) fn tracks(segments: &[PcbSegment], stack: &CopperStack, emitter: &mut Emitter) {
-    for segment in segments {
+/// One routed track or track arc: its copper layer, centreline, width, and
+/// solder-mask exposure. Built once and shared by the copper product and
+/// the solder-mask product.
+pub(crate) struct Route {
+    pub origin: Origin,
+    /// Copper layer: `(layer ...)`, or the copper entry of `(layers ...)`.
+    pub layer: Option<String>,
+    pub width_mm: f64,
+    pub start: NmPoint,
+    pub segment: PathSegment,
+    /// The mask layer this track is exposed through, if any.
+    pub exposed: Option<&'static str>,
+    /// Local mask expansion, in millimetres.
+    pub mask_margin: Option<f64>,
+    /// A collinear arc drawn as a straight path.
+    pub degenerate: bool,
+}
+
+/// The copper layer and mask exposure of a track's layer selectors.
+fn route_layers(
+    layer: Option<&str>,
+    layers: Option<&[String]>,
+) -> (Option<String>, Option<&'static str>) {
+    let names = layers.unwrap_or_default();
+    let copper = layer
+        .map(str::to_owned)
+        .or_else(|| names.iter().find(|name| name.ends_with(".Cu")).cloned());
+    let exposed = match copper.as_deref() {
+        Some("F.Cu") if names.iter().any(|name| name == "F.Mask") => Some("F.Mask"),
+        Some("B.Cu") if names.iter().any(|name| name == "B.Mask") => Some("B.Mask"),
+        _ => None,
+    };
+    (copper, exposed)
+}
+
+/// Tracks and track arcs in source order.
+pub(crate) fn routes(segments: &[PcbSegment], arcs: &[PcbRoutingArc]) -> Vec<Route> {
+    let tracks = segments.iter().map(|segment| {
         let uid = source_uid("track", segment.uuid.as_deref(), segment.source_range.start);
-        let (Some(layer), Some(width)) = (segment.layer.as_deref(), segment.width) else {
-            // KiCad writes exposed-mask tracks as `(layers "F.Cu" "F.Mask")`,
-            // which the source model does not decode yet.
+        let (layer, exposed) = route_layers(segment.layer.as_deref(), segment.layers.as_deref());
+        Route {
+            origin: Origin::routed(BindingSourceKind::Track, uid, net_key(&segment.net)),
+            layer,
+            width_mm: segment.width.unwrap_or(0.0),
+            start: nm_point(segment.start_x, segment.start_y),
+            segment: line(nm_point(segment.end_x, segment.end_y)),
+            exposed,
+            mask_margin: segment.solder_mask_margin,
+            degenerate: false,
+        }
+    });
+    let track_arcs = arcs.iter().map(|arc| {
+        let uid = source_uid("track_arc", arc.uuid.as_deref(), arc.source_range.start);
+        let (layer, exposed) = route_layers(arc.layer.as_deref(), arc.layers.as_deref());
+        let (start, mid, end) = (pcb_point(arc.start), pcb_point(arc.mid), pcb_point(arc.end));
+        let degenerate = circumcircle(&start, &mid, &end).is_none();
+        let segment = if degenerate {
+            line(end)
+        } else {
+            PathSegment::ArcSegment(ArcSegment {
+                kind: "arc".to_owned(),
+                mid_nm: mid,
+                end_nm: end,
+            })
+        };
+        Route {
+            origin: Origin::routed(BindingSourceKind::TrackArc, uid, net_key(&arc.net)),
+            layer,
+            width_mm: arc.width.unwrap_or(0.0),
+            start,
+            segment,
+            exposed,
+            mask_margin: arc.solder_mask_margin,
+            degenerate,
+        }
+    });
+    tracks.chain(track_arcs).collect()
+}
+
+impl Route {
+    /// The track's swept shape, widened by `grow_mm` on each side.
+    pub(crate) fn shape(&self, grow_mm: f64) -> Shape2d {
+        swept(
+            self.start.clone(),
+            self.segment.clone(),
+            self.width_mm + 2.0 * grow_mm,
+        )
+    }
+}
+
+/// Copper of every track and track arc.
+pub(crate) fn route_copper(routes: &[Route], stack: &CopperStack, emitter: &mut Emitter) {
+    for route in routes {
+        let uid = route.origin.uid.clone();
+        let Some(layer) = route.layer.as_deref() else {
             emitter.warn(
                 "track_layer_not_decoded",
-                "track has no single decoded layer and is not materialized".to_owned(),
+                "track has no copper layer and is not materialized".to_owned(),
                 Some(uid),
             );
             continue;
@@ -45,57 +134,17 @@ pub(crate) fn tracks(segments: &[PcbSegment], stack: &CopperStack, emitter: &mut
         let Some(slice) = stack.key(layer) else {
             continue;
         };
-        if width <= 0.0 {
+        if route.width_mm <= 0.0 {
             continue;
         }
-        let origin = Origin::routed(BindingSourceKind::Track, uid, net_key(&segment.net));
-        let shape = swept(
-            nm_point(segment.start_x, segment.start_y),
-            line(nm_point(segment.end_x, segment.end_y)),
-            width,
-        );
-        emitter.copper(&origin, slice, shape, identity());
-    }
-}
-
-pub(crate) fn track_arcs(arcs: &[PcbRoutingArc], stack: &CopperStack, emitter: &mut Emitter) {
-    for arc in arcs {
-        let (Some(layer), Some(width)) = (arc.layer.as_deref(), arc.width) else {
-            emitter.warn(
-                "track_layer_not_decoded",
-                "track arc has no single decoded layer and is not materialized".to_owned(),
-                Some(source_uid(
-                    "track_arc",
-                    arc.uuid.as_deref(),
-                    arc.source_range.start,
-                )),
-            );
-            continue;
-        };
-        let Some(slice) = stack.key(layer) else {
-            continue;
-        };
-        if width <= 0.0 {
-            continue;
-        }
-        let uid = source_uid("track_arc", arc.uuid.as_deref(), arc.source_range.start);
-        let (start, mid, end) = (pcb_point(arc.start), pcb_point(arc.mid), pcb_point(arc.end));
-        let segment = if circumcircle(&start, &mid, &end).is_some() {
-            PathSegment::ArcSegment(ArcSegment {
-                kind: "arc".to_owned(),
-                mid_nm: mid,
-                end_nm: end,
-            })
-        } else {
+        if route.degenerate {
             emitter.warn(
                 "degenerate_arc",
                 "collinear routing arc materialized as a straight path".to_owned(),
-                Some(uid.clone()),
+                Some(uid),
             );
-            line(end)
-        };
-        let origin = Origin::routed(BindingSourceKind::TrackArc, uid, net_key(&arc.net));
-        emitter.copper(&origin, slice, swept(start, segment, width), identity());
+        }
+        emitter.copper(&route.origin, slice, route.shape(0.0), identity());
     }
 }
 

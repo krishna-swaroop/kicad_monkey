@@ -139,7 +139,7 @@ impl Pieces {
                 }
             }
             PcbGraphicKind::Curve => self.curve(&graphic.points, placement),
-            PcbGraphicKind::Rect => self.rect(at(graphic.start), at(graphic.end)),
+            PcbGraphicKind::Rect => self.rect(graphic, placement),
             PcbGraphicKind::Circle => self.circle(at(graphic.center), at(graphic.end)),
             PcbGraphicKind::Poly => self.poly(graphic, placement),
             PcbGraphicKind::Text | PcbGraphicKind::TextBox => {}
@@ -167,13 +167,47 @@ impl Pieces {
         }
     }
 
-    fn rect(&mut self, start: Option<Xy>, end: Option<Xy>) {
-        let (Some((x0, y0)), Some((x1, y1))) = (start, end) else {
+    /// A rectangle built in its carrier's frame, so a rotated footprint
+    /// rotates it, with KiCad's corner radius (board format 20250829) as
+    /// quarter arcs.
+    fn rect(&mut self, graphic: &PcbGraphic, placement: &Placement) {
+        let (Some(start), Some(end)) = (graphic.start, graphic.end) else {
             return;
         };
+        let (left, right) = (start.x.min(end.x), start.x.max(end.x));
+        let (top, bottom) = (start.y.min(end.y), start.y.max(end.y));
+        let radius = graphic
+            .radius
+            .unwrap_or(0.0)
+            .clamp(0.0, (right - left).min(bottom - top) / 2.0);
+        let at = |x: f64, y: f64| placement.place(PcbPoint { x, y });
+        if nm(radius) == 0 {
+            self.loops.push(Contour {
+                start_nm: point(at(left, top)),
+                segments: vec![
+                    line(at(right, top)),
+                    line(at(right, bottom)),
+                    line(at(left, bottom)),
+                ],
+            });
+            return;
+        }
+        let bulge = radius * (1.0 - std::f64::consts::FRAC_1_SQRT_2);
         self.loops.push(Contour {
-            start_nm: point((x0, y0)),
-            segments: vec![line((x1, y0)), line((x1, y1)), line((x0, y1))],
+            start_nm: point(at(left + radius, top)),
+            segments: vec![
+                line(at(right - radius, top)),
+                arc(at(right - bulge, top + bulge), at(right, top + radius)),
+                line(at(right, bottom - radius)),
+                arc(
+                    at(right - bulge, bottom - bulge),
+                    at(right - radius, bottom),
+                ),
+                line(at(left + radius, bottom)),
+                arc(at(left + bulge, bottom - bulge), at(left, bottom - radius)),
+                line(at(left, top + radius)),
+                arc(at(left + bulge, top + bulge), at(left + radius, top)),
+            ],
         });
     }
 

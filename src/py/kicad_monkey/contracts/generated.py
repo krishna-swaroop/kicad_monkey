@@ -1708,6 +1708,7 @@ class SurfaceOperation(Struct, forbid_unknown_fields=True, frozen=True, tag="sur
     bounds: NmBounds
     net_key: str | UnsetType = field(default=UNSET)
     offset_nm: Nm | UnsetType = field(default=UNSET)
+    group_key: str | UnsetType = field(default=UNSET)
 
 
 class HoleOperation(Struct, forbid_unknown_fields=True, frozen=True, tag="hole", tag_field="kind"):

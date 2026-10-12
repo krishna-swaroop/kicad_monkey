@@ -505,7 +505,9 @@
       regard to order: per slice and material (and per net for copper),
       the material is the union of the adds minus the union of the
       subtracts. Chunking already reorders operations, so no other rule was
-      sound.</li>
+      sound. Operations that share a <code>group_key</code> form one item:
+      its subtracts remove only its own adds. The key is the item's source
+      UID, so filtering never changes it.</li>
     <li><strong>Offsets.</strong> Surface operations may carry a signed
       <code>offset_nm</code>: the shape grown (or eroded) by a disk in its
       local frame, with round corners. It appears only where the offset
@@ -544,9 +546,10 @@
       rules are for previews (a 0.1524 mm default and a 0.0847 mm minimum).
       KiCad's own rule applies: filled shapes may have no stroke, and
       unfilled shapes without one get 0.10 mm. Graphics on copper layers
-      are copper on their net. An outer-copper graphic that is also on its
-      mask layer, or carries <code>solder_mask_margin</code>, opens the mask
-      once, grown by its own margin or the board's.</li>
+      are copper on their net; a net given by ordinal resolves against the
+      declared nets. An outer-copper graphic that is also on its mask layer
+      opens the mask once, grown by its own margin or the board's. A margin
+      alone does not expose it (<code>PCB_SHAPE::IsOnLayer</code>).</li>
     <li><strong>Text.</strong> Text comes from the plot document, which
       resolves variables and render caches. A new core entry point,
       <code>realize_newstroke_kicad_a0</code>, places stroke text exactly as
@@ -568,9 +571,10 @@
     <li><strong>Knockout text.</strong> KiCad's box is the glyph bounds in
       the text frame, grown by max(pen / 2, height / 9). Outline glyphs
       become holes of the box region, using even-odd nesting. Stroke glyphs
-      have no closed outline, so they are subtracted. Under the combination
-      rule, that also removes any other silkscreen under the glyphs. A
-      knockout on a mask layer is reported, not drawn.</li>
+      have no closed outline, so they are subtracted within the box's own
+      <code>group_key</code>, which leaves other silkscreen and paste under
+      them untouched. A knockout on a mask layer is reported, not
+      drawn.</li>
     <li><strong>Not modelled, and reported:</strong>
       <ul>
         <li><code>solder_mask_min_width</code> web merging</li>
@@ -578,8 +582,6 @@
         <li>dashed strokes, drawn solid</li>
         <li>multi-line stroke text, laid out as one line</li>
         <li>outline fonts without a render cache</li>
-        <li>tracks whose <code>(layers ...)</code> form the source model
-          does not decode</li>
         <li>footprint scale and mirror transforms from format
           20260616</li>
       </ul>
@@ -597,6 +599,22 @@
           unplated holes with the wrong net.</li>
         <li>The legacy footprint token <code>solder_paste_ratio</code> is
           decoded.</li>
+      </ul></li>
+    <li><strong>Review batch 1.</strong>
+      <ul>
+        <li>Tracks and arcs written as <code>(layers "F.Cu" "F.Mask")</code>
+          are copper, and open the mask by their width plus twice their
+          own or the board's expansion, clamped at zero width. Core decodes
+          the layer set and <code>solder_mask_margin</code>.</li>
+        <li>NPTH pads keep their copper unless KiCad's
+          <code>PAD::FlashLayer</code> rule removes it: a circle or oval
+          centred on a drill at least as large.</li>
+        <li>Custom-pad primitives follow KiCad's fill and stroke rules. A
+          filled rectangle or polygon grows by half its stroke, and an
+          unfilled one is only its outline.</li>
+        <li>Edge.Cuts rectangles are built in their footprint's frame, so a
+          rotated footprint rotates them, and keep their corner radius as
+          arcs.</li>
       </ul></li>
   </ul>
   <h3>Evidence</h3>

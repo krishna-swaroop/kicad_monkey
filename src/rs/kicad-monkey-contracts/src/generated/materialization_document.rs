@@ -2936,15 +2936,17 @@ impl ::std::convert::TryFrom<::std::string::String> for SurfaceMaterial {
 /**Add or remove one shape of material on one slice. Conductive material
 always carries `net_key`; operations on different nets are never merged.
 
-Operations combine without regard to order: the material on a slice is
-the union of its `add` shapes minus the union of its `subtract` shapes,
-taken per material and, for conductive material, per net.*/
+Operations combine without regard to order. Per slice and material
+(and per net for conductive material), operations that share a
+`group_key` form one item whose subtracts remove only that item's own
+adds; the material is then the union of the ungrouped adds and every
+group's result, minus the union of the ungrouped subtracts.*/
 ///
 /// <details><summary>JSON schema</summary>
 ///
 /// ```json
 ///{
-///  "description": "Add or remove one shape of material on one slice. Conductive material\nalways carries `net_key`; operations on different nets are never merged.\n\nOperations combine without regard to order: the material on a slice is\nthe union of its `add` shapes minus the union of its `subtract` shapes,\ntaken per material and, for conductive material, per net.",
+///  "description": "Add or remove one shape of material on one slice. Conductive material\nalways carries `net_key`; operations on different nets are never merged.\n\nOperations combine without regard to order. Per slice and material\n(and per net for conductive material), operations that share a\n`group_key` form one item whose subtracts remove only that item's own\nadds; the material is then the union of the ungrouped adds and every\ngroup's result, minus the union of the ungrouped subtracts.",
 ///  "type": "object",
 ///  "required": [
 ///    "action",
@@ -2965,6 +2967,10 @@ taken per material and, for conductive material, per net.*/
 ///    },
 ///    "bounds": {
 ///      "$ref": "#/$defs/NmBounds"
+///    },
+///    "group_key": {
+///      "description": "Item that this operation's subtracts are confined to, such as one\nknockout text whose glyph strokes are cut from its own box. It is the\nitem's source UID, so it survives filtering unchanged.",
+///      "type": "string"
 ///    },
 ///    "index": {
 ///      "type": "integer",
@@ -3002,6 +3008,15 @@ pub struct SurfaceOperation {
     pub action: MaterialAction,
     pub affine: Affine2D,
     pub bounds: NmBounds,
+    /**Item that this operation's subtracts are confined to, such as one
+    knockout text whose glyph strokes are cut from its own box. It is the
+    item's source UID, so it survives filtering unchanged.*/
+    #[serde(
+        default,
+        deserialize_with = "crate::deserialize_present_nonnull",
+        skip_serializing_if = "::std::option::Option::is_none"
+    )]
+    pub group_key: ::std::option::Option<::std::string::String>,
     pub index: u32,
     #[serde(
         deserialize_with = "crate::materialization_contract::deserialize_surface_operation_kind"

@@ -8,10 +8,12 @@
 use super::emit::source_uid;
 use super::emit::{Emitter, Origin};
 use super::geometry::{nm, origin, pcb_point, rotate_mm, rotation_translation};
+use super::graphics::rect_shapes;
 use super::nets::net_key;
 use super::routing::polyline_contour;
+use super::source_graphics::outline;
 use crate::pcb::{
-    PcbFootprint, PcbPad, PcbPadCustomPrimitive, PcbPadPrimitiveGeometry, PcbPoint,
+    PcbFootprint, PcbHoleShape, PcbPad, PcbPadCustomPrimitive, PcbPadPrimitiveGeometry, PcbPoint,
     PcbPolygonPoint, PcbResolvedPadCopperLayer,
 };
 use kicad_monkey_contracts::generated::materialization_document::{
@@ -54,6 +56,25 @@ impl PadFrame {
     pub(crate) fn affine(&self, offset_x: f64, offset_y: f64) -> Affine2D {
         let (dx, dy) = rotate_mm(offset_x, offset_y, self.angle);
         rotation_translation(self.angle, self.anchor_x + dx, self.anchor_y + dy)
+    }
+}
+
+/// Whether an unplated pad has no copper on this layer (`PAD::FlashLayer`):
+/// a circle on a round drill, or an oval on an oblong drill, centred on the
+/// hole and no larger than it. Every other NPTH pad keeps its copper.
+pub(crate) fn npth_without_copper(pad: &PcbPad, resolved: &PcbResolvedPadCopperLayer<'_>) -> bool {
+    let Some(drill) = pad.drill.as_ref().filter(|_| pad.kind == "np_thru_hole") else {
+        return false;
+    };
+    let centred = nm(resolved.offset.x) == 0 && nm(resolved.offset.y) == 0;
+    let covers = |hole: f64, size: f64| nm(hole) >= nm(size);
+    let (drill_x, drill_y) = (drill.width, drill.height.unwrap_or(drill.width));
+    match (resolved.shape, drill.shape) {
+        ("circle", PcbHoleShape::Round) => centred && covers(drill_x, resolved.size.x),
+        ("oval", PcbHoleShape::Oval) => {
+            centred && covers(drill_x, resolved.size.x) && covers(drill_y, resolved.size.y)
+        }
+        _ => false,
     }
 }
 
@@ -266,9 +287,9 @@ fn custom_shapes(
     });
     let mut primitives = Vec::new();
     for primitive in resolved.custom_primitives {
-        match primitive_shape(primitive) {
-            Some(shape) => primitives.push(shape),
-            None => emitter.warn(
+        match primitive_shapes(primitive) {
+            shapes if !shapes.is_empty() => primitives.extend(shapes),
+            _ => emitter.warn(
                 "unsupported_custom_pad_primitive",
                 format!(
                     "custom pad primitive {} is not materialized",
@@ -292,25 +313,64 @@ fn stroke(start: PcbPoint, segment: PathSegment, width: f64) -> Shape2d {
     })
 }
 
-fn primitive_shape(primitive: &PcbPadCustomPrimitive) -> Option<Shape2d> {
-    let width = primitive.width.unwrap_or(0.0);
-    match primitive.geometry.as_ref()? {
-        PcbPadPrimitiveGeometry::Line { start, end } if width > 0.0 => {
-            Some(stroke(*start, line_to(*end), width))
+/// Fill and stroke of a custom-pad primitive as KiCad's `parsePCB_SHAPE`
+/// resolves them: an explicit `fill` wins; otherwise rectangles and
+/// circles are filled only without a stroke, and polygons always are. An
+/// unfilled shape without a stroke gets KiCad's 0.10 mm default.
+fn primitive_fill(primitive: &PcbPadCustomPrimitive) -> (bool, f64) {
+    let width = primitive.width.unwrap_or(0.0).max(0.0);
+    let zero = nm(width) == 0;
+    let solid = match (primitive.fill.as_deref(), primitive.geometry.as_ref()) {
+        (Some("none" | "no"), _) => false,
+        (Some(_), _) => true,
+        (None, Some(PcbPadPrimitiveGeometry::Polygon { .. })) => true,
+        (
+            None,
+            Some(PcbPadPrimitiveGeometry::Rect { .. } | PcbPadPrimitiveGeometry::Circle { .. }),
+        ) => zero,
+        (None, _) => false,
+    };
+    let stroke = if zero && !solid { 0.1 } else { width };
+    (solid, stroke)
+}
+
+/// Shapes of one custom-pad primitive in the pad frame. A filled shape is
+/// grown by half its stroke; an unfilled one is its outline.
+fn primitive_shapes(primitive: &PcbPadCustomPrimitive) -> Vec<Shape2d> {
+    let (solid, width) = primitive_fill(primitive);
+    let Some(geometry) = primitive.geometry.as_ref() else {
+        return Vec::new();
+    };
+    match geometry {
+        PcbPadPrimitiveGeometry::Line { start, end } => vec![stroke(*start, line_to(*end), width)],
+        PcbPadPrimitiveGeometry::Arc { start, mid, end } => {
+            vec![stroke(*start, arc_to(*mid, *end), width)]
         }
-        PcbPadPrimitiveGeometry::Arc { start, mid, end } if width > 0.0 => {
-            Some(stroke(*start, arc_to(*mid, *end), width))
+        PcbPadPrimitiveGeometry::Circle { center, end } => {
+            circle(*center, *end, width, solid).into_iter().collect()
         }
-        PcbPadPrimitiveGeometry::Circle { center, end } => circle(
-            *center,
-            *end,
-            width,
-            primitive.fill.as_deref() != Some("none"),
-        ),
-        PcbPadPrimitiveGeometry::Rect { start, end, radius } => rect(*start, *end, *radius),
-        PcbPadPrimitiveGeometry::Polygon { points } => polygon(points),
-        PcbPadPrimitiveGeometry::Curve { points } if width > 0.0 => Some(bezier(*points, width)),
-        _ => None,
+        PcbPadPrimitiveGeometry::Rect { start, end, radius } => {
+            let corners = [start.x, start.y, end.x, end.y].map(|value| i64::from(nm(value)));
+            let radius = i64::from(nm(radius.unwrap_or(0.0)));
+            rect_shapes(corners, radius, i64::from(nm(width)), solid)
+                .into_iter()
+                .collect()
+        }
+        PcbPadPrimitiveGeometry::Polygon { points } => {
+            let Some(region) = polygon(points) else {
+                return Vec::new();
+            };
+            let mut shapes: Vec<Shape2d> =
+                outline(&region, i64::from(nm(width))).into_iter().collect();
+            if solid {
+                shapes.push(region);
+            }
+            shapes
+        }
+        PcbPadPrimitiveGeometry::Curve { points } => vec![bezier(*points, width)],
+        // Bounding-box and vector proxies have no copper of their own; they
+        // are reported as unsupported primitives by the caller.
+        _ => Vec::new(),
     }
 }
 
@@ -347,30 +407,6 @@ fn circle(center: PcbPoint, end: PcbPoint, width: f64, filled: bool) -> Option<S
         center_nm: pcb_point(center),
         outer_radius_nm: len(outer),
         inner_radius_nm: len(radius - width / 2.0),
-    }))
-}
-
-fn rect(start: PcbPoint, end: PcbPoint, radius: Option<f64>) -> Option<Shape2d> {
-    let (width, height) = ((end.x - start.x).abs(), (end.y - start.y).abs());
-    if width <= 0.0 || height <= 0.0 {
-        return None;
-    }
-    let center = at((start.x + end.x) / 2.0, (start.y + end.y) / 2.0);
-    let radius = radius.unwrap_or(0.0).clamp(0.0, width.min(height) / 2.0);
-    if radius <= 0.0 {
-        return Some(Shape2d::Rect2d(Rect2d {
-            kind: "rect_2d".to_owned(),
-            center_nm: center,
-            width_nm: len(width),
-            height_nm: len(height),
-        }));
-    }
-    Some(Shape2d::RoundedRect2d(RoundedRect2d {
-        kind: "rounded_rect_2d".to_owned(),
-        center_nm: center,
-        width_nm: len(width),
-        height_nm: len(height),
-        radius_nm: len(radius),
     }))
 }
 

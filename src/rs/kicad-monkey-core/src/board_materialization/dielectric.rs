@@ -20,6 +20,7 @@ fn dielectric(action: MaterialAction) -> Material {
         material: SurfaceMaterial::Dielectric,
         action,
         net_key: None,
+        group_key: None,
     }
 }
 

@@ -19,6 +19,7 @@ use super::graphics::{Drawn, TextSpec, operation_shapes, text_shapes};
 use super::nets::net_key;
 use super::pads::reference;
 use super::pads::{pad_shapes, place_pad};
+use super::routing::Route;
 use super::routing::polyline_contour;
 use super::source_graphics::{graphic_layers, graphic_shapes};
 use crate::board_plotter_ir::{
@@ -80,6 +81,7 @@ fn material(product: MaterialProduct, action: MaterialAction) -> Material {
         },
         action,
         net_key: None,
+        group_key: None,
     }
 }
 
@@ -380,7 +382,7 @@ fn mask_of(layer: &str) -> Option<&'static str> {
 }
 
 /// One graphic on its technical layers. An outer-copper shape that is also
-/// on its mask layer, or carries `solder_mask_margin`, opens the mask once,
+/// on its mask layer opens the mask once,
 /// grown by its own margin or else the board's (`PCB_SHAPE::
 /// GetSolderMaskExpansion`); its raw mask-layer copy is not drawn again.
 fn source_graphic(
@@ -391,9 +393,10 @@ fn source_graphic(
     out: &mut Vec<PlacedGraphic>,
 ) {
     let layers = graphic_layers(graphic);
+    // KiCad exposes a copper shape only when it is also on the mask layer
+    // (`PCB_SHAPE::IsOnLayer`); `solder_mask_margin` alone only sizes it.
     let exposes = |mask: &str| {
-        layers.iter().any(|layer| mask_of(layer) == Some(mask))
-            && (layers.contains(&mask) || graphic.solder_mask_margin.is_some())
+        layers.iter().any(|layer| mask_of(layer) == Some(mask)) && layers.contains(&mask)
     };
     for &layer in &layers {
         if technical(layer) && !(layer.ends_with(".Mask") && exposes(layer)) {
@@ -470,8 +473,9 @@ pub(crate) fn technical_graphics(
 }
 
 /// Emit one graphic: its shapes with `action`, and knockout cuts removed
-/// from an additive layer. On the mask, where graphics are openings, a
-/// knockout would invert, so it is reported instead.
+/// from its own adds through a shared `group_key`. On the mask, where
+/// graphics are openings, a knockout would invert, so it is reported
+/// instead.
 fn emit_graphic(
     graphic: &PlacedGraphic,
     product: MaterialProduct,
@@ -511,12 +515,16 @@ fn emit_graphic(
         (MaterialAction::Subtract, local(&drawn.cuts)),
         (MaterialAction::Subtract, global(&drawn.board_cuts)),
     ];
+    // Knockout cuts remove only this item's own box, not other material.
+    let group_key = has_cuts.then(|| graphic.origin.uid.clone());
     for (action, shapes) in passes {
         for (shape, affine) in shapes {
+            let mut material = material(product, action);
+            material.group_key.clone_from(&group_key);
             emitter.offset_surface(
                 &graphic.origin,
                 slice,
-                material(product, action),
+                material,
                 shape,
                 affine,
                 graphic.offset_nm,
@@ -533,6 +541,7 @@ pub(crate) struct TechnicalBoard<'a> {
     pub footprints: &'a [PcbFootprint],
     pub pads: &'a [PcbPad],
     pub vias: &'a [PcbVia],
+    pub routes: &'a [Route],
     pub graphics: &'a [PlacedGraphic],
     /// Whether board and footprint text could be plotted.
     pub text_plotted: bool,
@@ -583,6 +592,7 @@ impl TechnicalBoard<'_> {
         self.pad_openings(product, side, emitter);
         if product == MaterialProduct::SolderMask {
             self.via_openings(side, emitter);
+            self.track_openings(side, emitter);
         }
         let action = if product == MaterialProduct::SolderMask {
             MaterialAction::Subtract
@@ -677,6 +687,32 @@ impl TechnicalBoard<'_> {
                     offset,
                 );
             }
+        }
+    }
+
+    /// Tracks exposed through the mask (`(layers "F.Cu" "F.Mask")`) open
+    /// it by their width plus twice the local or board expansion, never
+    /// below zero width (`PCB_TRACK::GetSolderMaskExpansion`).
+    fn track_openings(&self, side: &Side, emitter: &mut Emitter) {
+        for route in self
+            .routes
+            .iter()
+            .filter(|route| route.exposed == Some(side.layer))
+        {
+            if route.width_mm <= 0.0 {
+                continue;
+            }
+            let margin_mm = route
+                .mask_margin
+                .unwrap_or(self.margins.mask_nm as f64 / 1_000_000.0)
+                .max(-route.width_mm / 2.0);
+            emitter.surface(
+                &route.origin,
+                side.slice,
+                material(MaterialProduct::SolderMask, MaterialAction::Subtract),
+                route.shape(margin_mm),
+                identity(),
+            );
         }
     }
 

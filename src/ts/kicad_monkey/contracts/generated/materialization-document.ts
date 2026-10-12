@@ -207,9 +207,11 @@ export interface NmBounds1 {
  * Add or remove one shape of material on one slice. Conductive material
  * always carries `net_key`; operations on different nets are never merged.
  *
- * Operations combine without regard to order: the material on a slice is
- * the union of its `add` shapes minus the union of its `subtract` shapes,
- * taken per material and, for conductive material, per net.
+ * Operations combine without regard to order. Per slice and material
+ * (and per net for conductive material), operations that share a
+ * `group_key` form one item whose subtracts remove only that item's own
+ * adds; the material is then the union of the ungrouped adds and every
+ * group's result, minus the union of the ungrouped subtracts.
  */
 export interface SurfaceOperation {
   kind: "surface";
@@ -224,6 +226,12 @@ export interface SurfaceOperation {
    * 32-bit internal-unit limit, so the packed encoding stores it losslessly.
    */
   offset_nm?: number;
+  /**
+   * Item that this operation's subtracts are confined to, such as one
+   * knockout text whose glyph strokes are cut from its own box. It is the
+   * item's source UID, so it survives filtering unchanged.
+   */
+  group_key?: string;
   affine: Affine2D;
   bounds: NmBounds;
 }

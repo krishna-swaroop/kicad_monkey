@@ -2,7 +2,7 @@
 
 use crate::pcb::{PcbNet, PcbNetRef};
 use kicad_monkey_contracts::generated::materialization_document::Net;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// Resolved net key of a source reference: the net name, a `#ordinal` key
 /// for legacy unnamed ordinals, or the empty key for no net.
@@ -37,4 +37,36 @@ pub(crate) fn net_table<'a>(
             net_class: None,
         })
         .collect()
+}
+
+/// Resolves graphic net references, which core leaves as ordinals, against
+/// the declared nets and the net table.
+pub(crate) struct NetNames {
+    by_code: BTreeMap<i64, String>,
+    known: BTreeSet<String>,
+}
+
+impl NetNames {
+    pub(crate) fn new(declared: &[PcbNet], table: &[Net]) -> Self {
+        Self {
+            by_code: declared
+                .iter()
+                .map(|net| (net.code, net.name.clone()))
+                .collect(),
+            known: table.iter().map(|net| net.key.clone()).collect(),
+        }
+    }
+
+    /// The net key of `net`, or `None` when it names no net in the table.
+    pub(crate) fn resolve(&self, net: Option<&PcbNetRef>) -> Option<String> {
+        let Some(net) = net else {
+            return Some(String::new());
+        };
+        let key = match (&net.name, net.ordinal) {
+            (Some(name), _) if !name.is_empty() => name.clone(),
+            (_, Some(0) | None) => String::new(),
+            (_, Some(code)) => self.by_code.get(&code).cloned()?,
+        };
+        self.known.contains(&key).then_some(key)
+    }
 }

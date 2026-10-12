@@ -391,6 +391,10 @@ pub(super) fn segment_from_span(
         end_y: end.1,
         width: optional_child_f64(source, &children, "width")?,
         layer: optional_child_string(source, &children, "layer")?,
+        layers: child(&children, "layers")
+            .map(|_| child_strings(source, &children, "layers", limits.max_object_children))
+            .transpose()?,
+        solder_mask_margin: optional_child_f64(source, &children, "solder_mask_margin")?,
         locked: has_flag(&header, "locked"),
         net: child_net_ref_or_zero(source, &children)?,
         uuid: optional_uuid(source, &children)?,
@@ -515,6 +519,10 @@ pub(super) fn routing_arc_from_span(
         end: required_point(source, &children, "end", span)?,
         width: optional_child_f64(source, &children, "width")?,
         layer: optional_child_string(source, &children, "layer")?,
+        layers: child(&children, "layers")
+            .map(|_| child_strings(source, &children, "layers", limits.max_object_children))
+            .transpose()?,
+        solder_mask_margin: optional_child_f64(source, &children, "solder_mask_margin")?,
         net: child_net_ref_or_zero(source, &children)?,
         uuid: optional_uuid(source, &children)?,
         source_range: span.range.clone(),

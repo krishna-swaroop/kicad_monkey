@@ -11,7 +11,7 @@
 use super::emit::{Emitter, Origin, source_uid};
 use super::geometry::{identity, rotation_translation};
 use super::graphics::{Drawn, circle, line_to, point, rect_shapes, swept};
-use super::nets::net_key;
+use super::nets::NetNames;
 use super::pads::{polygon, reference};
 use super::stack::CopperStack;
 use crate::pcb::{PcbFootprint, PcbFootprintGraphic, PcbGraphic, PcbGraphicKind, PcbPoint};
@@ -74,7 +74,7 @@ fn fill_and_stroke(graphic: &PcbGraphic, layer: &str, drawn: &mut Drawn) -> (boo
 }
 
 /// A closed stroke along the outer contour of a polygon region.
-fn outline(region: &Shape2d, stroke: i64) -> Option<Shape2d> {
+pub(crate) fn outline(region: &Shape2d, stroke: i64) -> Option<Shape2d> {
     let Shape2d::PlanarRegion2d(region) = region else {
         return None;
     };
@@ -172,6 +172,7 @@ pub(crate) fn copper_graphics(
     footprint: &[PcbFootprintGraphic],
     footprints: &[PcbFootprint],
     copper: &CopperStack,
+    nets: &NetNames,
     emitter: &mut Emitter,
 ) {
     let placed_board = board.iter().enumerate().map(|(position, graphic)| {
@@ -204,7 +205,15 @@ pub(crate) fn copper_graphics(
             let Some(slice) = copper.key(layer) else {
                 continue;
             };
-            let net = graphic.net.as_ref().map(net_key).unwrap_or_default();
+            let net = nets.resolve(graphic.net.as_ref()).unwrap_or_else(|| {
+                emitter.warn(
+                    "graphic_net_unknown",
+                    "copper graphic names a net the board does not declare; it has no net"
+                        .to_owned(),
+                    Some(uid.clone()),
+                );
+                String::new()
+            });
             let mut origin = Origin::routed(kind, uid.clone(), net);
             origin.refdes.clone_from(&refdes);
             let mut drawn = Drawn::default();

@@ -242,3 +242,147 @@ fn technical_products_keep_rule_two_and_determinism() {
         }
     }
 }
+
+/// Review batch 1: exposed tracks, NPTH copper, custom-primitive strokes,
+/// rotated and rounded outline rectangles, mask-layer-only copper exposure,
+/// and knockout cuts confined to their own box.
+const BATCH: &str = r#"(kicad_pcb
+  (version 20241229)
+  (generator pcbnew)
+  (general (thickness 1.6))
+  (layers (0 "F.Cu" signal) (31 "B.Cu" signal) (36 "B.SilkS" user) (37 "F.SilkS" user)
+    (38 "B.Mask" user) (39 "F.Mask" user) (44 "Edge.Cuts" user))
+  (setup (pad_to_mask_clearance 0.05))
+  (net 0 "")
+  (net 1 "GND")
+  (footprint "Demo:H"
+    (layer "F.Cu")
+    (at 10 10 45)
+    (fp_rect (start -2 -1) (end 2 1) (stroke (width 0.05) (type solid)) (fill none)
+      (layer "Edge.Cuts") (uuid rotated-cut))
+    (pad "" np_thru_hole circle (at 0 0) (size 3 3) (drill 2) (layers "*.Cu" "*.Mask")
+      (uuid npth-ring))
+    (pad "" np_thru_hole circle (at 5 0) (size 2 2) (drill 2) (layers "*.Cu" "*.Mask")
+      (uuid npth-bare))
+    (pad "1" smd custom (at 0 5) (size 0.5 0.5) (layers "F.Cu")
+      (options (clearance outline) (anchor circle))
+      (primitives
+        (gr_rect (start -1 -0.5) (end 1 0.5) (width 0.4) (fill yes))
+        (gr_poly (pts (xy 2 0) (xy 3 0) (xy 3 1)) (width 0.1) (fill none)))
+      (uuid custom-pad)))
+  (gr_rect (start 0 0) (end 40 30) (stroke (width 0.05) (type solid)) (layer "Edge.Cuts"))
+  (gr_rect (start 30 20) (end 36 26) (radius 1) (stroke (width 0.05) (type solid))
+    (layer "Edge.Cuts") (uuid rounded-cut))
+  (segment (start 20 5) (end 30 5) (width 0.25) (layers "F.Cu" "F.Mask") (net 1)
+    (uuid exposed-track))
+  (gr_rect (start 25 10) (end 27 12) (stroke (width 0) (type solid)) (fill yes)
+    (layer "F.Cu") (solder_mask_margin 0.3) (net 1) (uuid margin-only))
+  (gr_text "KO" (at 5 25 0) (layer "F.SilkS" knockout) (uuid knockout-text)
+    (effects (font (size 1 1) (thickness 0.15)) (justify left bottom)))
+)
+"#;
+
+#[test]
+fn exposed_tracks_open_the_mask_by_their_width_plus_margins() {
+    let document = materialize(BATCH, &["copper", "solder_mask"]);
+    let copper = bound(&document, "copper.front", "exposed-track");
+    assert_eq!(copper[0]["shape"]["width_nm"], 250_000);
+    let opening = bound(&document, "mask.front", "exposed-track");
+    assert_eq!(
+        opening[0]["shape"]["width_nm"], 350_000,
+        "0.25 + 2 x 0.05 mm"
+    );
+    assert_eq!(opening[0]["action"], "subtract");
+    // A margin alone does not expose copper; KiCad needs the mask layer.
+    assert!(bound(&document, "mask.front", "margin-only").is_empty());
+}
+
+#[test]
+fn npth_pads_keep_copper_unless_the_drill_covers_them() {
+    let document = materialize(BATCH, &["copper"]);
+    for slice in ["copper.front", "copper.back"] {
+        let ring = bound(&document, slice, "npth-ring");
+        assert_eq!(ring[0]["shape"]["radius_nm"], 1_500_000);
+        assert!(bound(&document, slice, "npth-bare").is_empty());
+    }
+}
+
+#[test]
+fn custom_primitives_follow_kicad_fill_and_stroke() {
+    let document = materialize(BATCH, &["copper"]);
+    let shapes: Vec<&Value> = bound(&document, "copper.front", "custom-pad")
+        .into_iter()
+        .map(|op| &op["shape"])
+        .collect();
+    // The filled rect grows by half its 0.4 mm stroke, with round corners.
+    assert!(shapes.contains(&&json!({
+        "kind": "rounded_rect_2d", "center_nm": [0, 0], "width_nm": 2_400_000,
+        "height_nm": 1_400_000, "radius_nm": 200_000
+    })));
+    // The unfilled polygon is only its outline.
+    let kinds: Vec<&Value> = shapes.iter().map(|shape| &shape["kind"]).collect();
+    assert!(!kinds.contains(&&json!("planar_region_2d")));
+    assert_eq!(
+        kinds
+            .iter()
+            .filter(|kind| ***kind == json!("swept_path_2d"))
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn outline_rectangles_rotate_with_their_footprint_and_keep_corner_radius() {
+    let document = materialize(BATCH, &["dielectric"]);
+    let region = document["operations"]
+        .as_array()
+        .expect("operations")
+        .iter()
+        .find(|op| op["action"] == "add")
+        .expect("the board region");
+    let holes = region["shape"]["holes"].as_array().expect("cutouts");
+    assert_eq!(holes.len(), 2);
+    let segment_kinds = |hole: &Value| -> Vec<String> {
+        hole["segments"]
+            .as_array()
+            .expect("segments")
+            .iter()
+            .map(|segment| segment["kind"].as_str().expect("kind").to_owned())
+            .collect()
+    };
+    // The 45-degree footprint's 4 x 2 mm rectangle keeps its size: its first
+    // edge is 4 mm long whatever direction it points.
+    let rotated = holes
+        .iter()
+        .find(|hole| segment_kinds(hole).len() == 3)
+        .expect("the rotated rectangle");
+    let start = &rotated["start_nm"];
+    let first = &rotated["segments"][0]["end_nm"];
+    let length = ((first[0].as_f64().unwrap() - start[0].as_f64().unwrap())
+        .hypot(first[1].as_f64().unwrap() - start[1].as_f64().unwrap())
+        / 1_000.0)
+        .round();
+    assert_eq!(length, 4_000.0, "first edge length in micrometres");
+    let rounded = holes
+        .iter()
+        .find(|hole| segment_kinds(hole).len() == 8)
+        .expect("the rounded rectangle");
+    assert_eq!(
+        segment_kinds(rounded)
+            .iter()
+            .filter(|kind| *kind == "arc")
+            .count(),
+        4
+    );
+}
+
+#[test]
+fn knockout_cuts_are_confined_to_their_own_box() {
+    let document = materialize(BATCH, &["silkscreen"]);
+    let knockout = bound(&document, "silkscreen.front", "knockout-text");
+    assert!(knockout.len() > 1);
+    assert!(
+        knockout.iter().all(|op| op["group_key"] == "knockout-text"),
+        "the box and its glyph cuts share one group"
+    );
+}

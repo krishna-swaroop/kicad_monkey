@@ -7,10 +7,10 @@ use super::flash::{FlashLayers, flash_layers, presentation_plot};
 use super::geometry::rotation_translation;
 use super::holes::{HoleSpec, pad_hole, via_holes};
 use super::layers::board_stack;
-use super::nets::net_table;
-use super::pads::{PadFrame, land, place_pad, reference};
+use super::nets::{NetNames, net_table};
+use super::pads::{PadFrame, land, npth_without_copper, place_pad, reference};
 use super::profile::close_profile;
-use super::routing::{track_arcs, tracks, via_lands, zone_fills};
+use super::routing::{route_copper, routes, via_lands, zone_fills};
 use super::source_graphics::copper_graphics;
 use super::stack::CopperStack;
 use super::technical::{
@@ -194,11 +194,13 @@ pub(crate) fn emit_board(
     };
     if wants(MaterialProduct::Copper) {
         emit_copper(source, &view, &sources, &copper, &mut emitter)?;
+        let names = NetNames::new(&collect(view.nets())?, &nets);
         copper_graphics(
             &graphics.0,
             &graphics.1,
             &sources.footprints,
             &copper,
+            &names,
             &mut emitter,
         );
     }
@@ -253,8 +255,7 @@ fn emit_copper(
             None,
         );
     }
-    tracks(&sources.segments, copper, emitter);
-    track_arcs(&sources.arcs, copper, emitter);
+    route_copper(&routes(&sources.segments, &sources.arcs), copper, emitter);
     via_lands(&sources.vias, copper, &flash, emitter);
     zone_fills(&sources.zones, copper, emitter);
     let pads = Pads {
@@ -263,9 +264,7 @@ fn emit_copper(
         footprints: &sources.footprints,
     };
     for pad in &sources.pads {
-        if let Some((origin, frame)) = pads.placement(pad, emitter)
-            && pad.kind != "np_thru_hole"
-        {
+        if let Some((origin, frame)) = pads.placement(pad, emitter) {
             pads.lands(pad, &frame, &origin, emitter);
         }
     }
@@ -435,6 +434,7 @@ fn emit_technical(board: &Board<'_>, products: &[MaterialProduct], emitter: &mut
         footprints: &board.sources.footprints,
         pads: &board.sources.pads,
         vias: &board.sources.vias,
+        routes: &routes(&board.sources.segments, &board.sources.arcs),
         graphics: &placed,
         text_plotted: document.is_some(),
     };
@@ -468,6 +468,7 @@ impl Pads<'_> {
                 continue;
             };
             match resolve_pad_copper_layer(pad, &layer) {
+                Ok(resolved) if npth_without_copper(pad, &resolved) => {}
                 Ok(resolved) => land(&resolved, frame, origin, slice, emitter),
                 Err(cause) => emitter.warn(
                     "unsupported_padstack",

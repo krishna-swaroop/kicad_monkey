@@ -45,11 +45,13 @@ pub(crate) struct HoleFacts {
     pub backdrills: Vec<Backdrill>,
 }
 
-/// Material, action, and owning net of a surface operation.
+/// Material, action, owning net, and cut group of a surface operation.
 pub(crate) struct Material {
     pub material: SurfaceMaterial,
     pub action: MaterialAction,
     pub net_key: Option<String>,
+    /// Item whose subtracts are confined to its own adds.
+    pub group_key: Option<String>,
 }
 
 #[derive(Default)]
@@ -116,6 +118,7 @@ impl Emitter {
             material: SurfaceMaterial::Copper,
             action: MaterialAction::Add,
             net_key: Some(origin.net_key.clone()),
+            group_key: None,
         };
         self.surface(origin, slice_key, material, shape, affine);
     }
@@ -154,6 +157,7 @@ impl Emitter {
                 material: material.material,
                 slice_key: slice_key.to_owned(),
                 net_key: material.net_key,
+                group_key: material.group_key,
                 shape,
                 offset_nm: (offset_nm != 0).then_some(Nm(offset_nm)),
                 affine,

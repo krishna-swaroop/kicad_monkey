@@ -436,6 +436,9 @@ pub struct PcbSegment {
     pub end_y: f64,
     pub width: Option<f64>,
     pub layer: Option<String>,
+    /// `(layers "F.Cu" "F.Mask")`: copper exposed through the solder mask.
+    pub layers: Option<Vec<String>>,
+    pub solder_mask_margin: Option<f64>,
     /// Bare `locked` header flag only; the Python oracle's `has_flag` does
     /// not honor the `(locked yes)` child form on segments.
     pub locked: bool,
@@ -539,6 +542,9 @@ pub struct PcbRoutingArc {
     pub end: PcbPoint,
     pub width: Option<f64>,
     pub layer: Option<String>,
+    /// `(layers "F.Cu" "F.Mask")`: copper exposed through the solder mask.
+    pub layers: Option<Vec<String>>,
+    pub solder_mask_margin: Option<f64>,
     pub net: PcbNetRef,
     pub uuid: Option<String>,
     pub source_range: Range<usize>,
