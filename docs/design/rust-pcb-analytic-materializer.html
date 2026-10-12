@@ -749,11 +749,18 @@
           tenting, with the board default as fallback.</td>
         <td>Lowered mask and paste match <code>kicad-cli</code> Gerber
           output within a stated tolerance.</td></tr>
-      <tr><td>4. Net classes, differential pairs, components</td>
-        <td>Project class resolution, pairing, and component
-          records.</td>
-        <td>Results match KiCad on the corpus and on suffix-form
-          vectors.</td></tr>
+      <tr><td>4. Net classes, differential pairs, components, remaining
+          copper and holes</td>
+        <td>Project class resolution, pairing, and component records.
+          Also the open coverage rows below: net ties and jumpers, copper
+          text, pad-net inheritance for footprint copper, plated edges,
+          castellations, counterbores and countersinks, pin-to-die data,
+          and the <code>stack_regions</code> contract with its single
+          rigid region.</td>
+        <td>Results match KiCad on the corpus and on suffix-form vectors.
+          Net-tie bridges keep both nets in DC parity vectors. Plated-edge
+          and post-machined holes match <code>kicad-cli</code> Gerber and
+          drill output.</td></tr>
       <tr><td>5. Packed encoding and pushdown</td>
         <td>The columnar writer and reader, the chunk index, and scope
           pushdown into <code>PcbSelection</code>.</td>
@@ -771,6 +778,106 @@
           result.</td></tr>
     </tbody>
   </table>
+
+  <h2>Physical coverage plan</h2>
+  <p>The materializer must emit every piece of material that conducts,
+  insulates, or carries heat. This table tracks what is done and which
+  slice closes each open row. It mirrors the board-model spec in
+  prism-sim-studio. Whatever is not represented yet is reported as a
+  diagnostic, never dropped.</p>
+  <table>
+    <thead><tr><th>Item</th><th>Rule</th><th>Status</th></tr></thead>
+    <tbody>
+      <tr><td>Net ties</td><td>Materialize the copper bridge of a net-tie
+        footprint (<code>net_tie_pad_groups</code>, first-class since board
+        format 20220818) so DC sees it. Its binding entry lists every tied
+        net; the nets are never merged. Jumper pad groups
+        (<code>jumper_pad_groups</code>,
+        <code>duplicate_pad_numbers_are_jumpers</code>) are recorded the same
+        way. Core already decodes both.</td><td>Slice 4. Today the bridge is
+        emitted as footprint copper on the empty net.</td></tr>
+      <tr><td>Unused inner-layer pads</td><td>Honour
+        <code>remove_unused_layers</code>, <code>keep_end_layers</code>, and
+        zone layer connections; emit only the pads KiCad flashes on each
+        layer.</td><td>Done in slice 1 (<code>flash.rs</code>).</td></tr>
+      <tr><td>Per-layer padstacks</td><td>Front, inner, and back shapes each
+        produce one operation per layer.</td><td>Done in slice 1.</td></tr>
+      <tr><td>Other copper</td><td>Footprint and board graphics on copper
+        layers, custom pads built from graphics, copper text, and logos.
+        Mostly <code>planar_region_2d</code>, with the net of the pad they
+        belong to when attached.</td><td>Graphics and custom pads done in
+        slice 3. Copper text and pad-net inheritance in slice 4.</td></tr>
+      <tr><td>Plated edges and castellations</td><td>Plated-edge geometry
+        (<code>edge_plating</code>, decoded by core) with its net.
+        Castellated pads (<code>pad_prop_castellated</code>, not decoded
+        yet) as plated holes cut by the profile.</td><td>Slice 4.</td></tr>
+      <tr><td>Surface finish</td><td><code>copper_finish</code> on the stack.
+        Its emissivity and high-frequency loss live in
+        <code>prism.materials</code>.</td><td>Recorded in slice 2.</td></tr>
+      <tr><td>Mask and paste margins</td><td>Per-pad and per-footprint
+        overrides applied in mask and paste
+        materialization.</td><td>Done in slice 3.</td></tr>
+      <tr><td>Mechanical heat paths</td><td>Shields, heatsinks, standoffs,
+        and stiffeners come from System Builder parts or 3D models and enter
+        the thermal model as mounts and attachments.</td><td>Not a
+        materializer product; set up in prism-sim-studio.</td></tr>
+      <tr><td>B&eacute;zier curves</td><td>Exact cubic segments in swept
+        paths and region rings (<code>gr_curve</code> and B&eacute;zier pad
+        primitives); no lowering at materialization time.</td><td>Done in
+        slice 1.</td></tr>
+      <tr><td>Counterbores and countersinks</td><td>KiCad 10.0 (board format
+        20251101, with back-drill) adds front and back post-machining to
+        pads and vias. Core decodes it. Hole operations gain the mode,
+        diameter, depth, and countersink angle, and the dielectric and copper
+        subtract the machined volume.</td><td>Slice 4. Back-drill done in
+        slice 2.</td></tr>
+      <tr><td>SI pad and layer data</td><td>Per-pad pin-to-die length
+        (<code>die_length</code>, decoded) and delay (<code>die_delay</code>,
+        not decoded yet; scaled correctly from format 20251027) on the pad's
+        binding entry. KiCad's impedance control is one board-level flag
+        (<code>dielectric_constraints</code>), recorded on the stack; per-layer
+        targets belong in the simulation setup.</td><td>Slice 4.</td></tr>
+    </tbody>
+  </table>
+
+  <h2>Stack regions (rigid-flex)</h2>
+  <ul>
+    <li><strong>Contract.</strong> The stack gains
+      <code>stack_regions</code>. Each region has a region polygon, the
+      subset of slices present, and extra slices that exist only in that
+      region. A rigid board has exactly one region covering the whole
+      board. The a0 contract is rewritten in place to add it.</li>
+    <li><strong>Roles.</strong> <code>SliceRole</code> gains
+      <code>coverlay</code>, <code>adhesive</code>, and
+      <code>stiffener</code>.</li>
+    <li><strong>Source.</strong> KiCad has no per-region stackup: the local
+      KiCad checkout shows rigid-flex only in its IPC-2581 and ODB++ export
+      types. Extra regions therefore come from a declared KiCad convention
+      (layer names and attributes, documented with the producer). The
+      producer rejects anything ambiguous with a diagnostic and never
+      guesses.</li>
+    <li><strong>Bend lines.</strong> A region may carry bend lines with a
+      radius and an angle, for 3D views and System Builder. Flat simulation
+      ignores them for now.</li>
+    <li><strong>Consumers.</strong> Version 1 engines may reject boards with
+      more than one region. Supporting several regions later is an engine
+      change, not a contract change. AC PDN needs particular care where a
+      plane cavity crosses from rigid to flex.</li>
+  </ul>
+
+  <h2>KiCad 11 formats to watch</h2>
+  <p>KiCad 11 development formats add simulation-relevant facts. The
+  producer will gate each on the file format version:</p>
+  <ul>
+    <li>frequency-dependent dielectric models in the stackup
+      (20260511);</li>
+    <li>pad simulation electrical types (20260521);</li>
+    <li>footprint affine transforms with scale and mirror (20260616;
+      currently reported as <code>footprint_transform_partial</code>);</li>
+    <li>bold as a stroke-width multiplier (20260826; handled);</li>
+    <li>an exclude-from-simulation footprint attribute (20260828);</li>
+    <li>microvia stacks (20260830).</li>
+  </ul>
 
   <h2>Upstream path</h2>
   <ul>
