@@ -276,8 +276,8 @@
       <code>refdes</code>, <code>pad_number</code>, and
       <code>net_key</code>.</li>
     <li><strong>Chunk index:</strong> for each (slice, tile), the bounds,
-      the <code>net_keys</code>, and the range of operation indices. Byte
-      offsets into the packed columns come with the slice-5 writer.</li>
+      the <code>net_keys</code>, and the range of operation indices. The
+      pack's section directory adds each chunk block's byte offset.</li>
   </ul>
   <h3>Correctness rules</h3>
   <ol>
@@ -336,9 +336,47 @@
     <li><strong>Header.</strong> The header holds the schema version,
       producer version, source hash, scope, and chunk directory. Readers
       seek straight to the chunks they need.</li>
-    <li><strong>Byte layout.</strong> The byte layout is specified in this
-      document, because TypeSpec cannot express a binary layout. TypeSpec
-      governs the header, the chunk index, and the debug document.</li>
+    <li><strong>Byte layout.</strong> The byte layout is specified here and
+      in the pack crate's module docs, because TypeSpec cannot express a
+      binary layout. TypeSpec governs the JSON header and the debug
+      document.</li>
+    <li><strong>Layout (format 0).</strong> All values are little-endian,
+      and every section starts on 8 bytes. The pack is, in order:
+      <ul>
+        <li>a 16-byte preamble: magic, version, flags, and header
+          length;</li>
+        <li>the JSON header: the document without operations, binding, or
+          chunks;</li>
+        <li>a section directory of offset and length pairs;</li>
+        <li>these binary sections:
+          <ul>
+            <li><strong>String table:</strong> every source UID, refdes,
+              pad number, and group key once. A lowercase canonical UUID
+              takes 16 bytes.</li>
+            <li><strong>Binding:</strong> columns of string, net, and
+              operation indices.</li>
+            <li><strong>Chunk directory:</strong> columns of slice index,
+              tile, bounds, operation range, and net indices.</li>
+            <li><strong>Linear-part table:</strong> each distinct affine
+              <code>m11 m12 m21 m22</code> once, as <code>f64</code>.</li>
+            <li><strong>Column blocks:</strong> one per chunk, as a struct of
+              arrays. Each operation has a linear index, an int32
+              translation, int32 bounds, slice, net, group, and offset
+              indices, a parameter start, and kind, material, and shape
+              bytes. The int32 parameter stream holds the shapes and hole
+              details, with path segment tags packed 16 to a word.</li>
+          </ul></li>
+      </ul></li>
+    <li><strong>Reading.</strong> <code>PackReader::open</code> reads the
+      header, binding, and chunk directory and checks the
+      operation-independent rules. A chunk then decodes on its own, and
+      <code>document()</code> decodes everything and validates it. Values
+      round-trip exactly, <code>f64</code> bits included. Damaged or
+      truncated packs fail closed; tests flip and cut every byte.</li>
+    <li><strong>Size.</strong> A pack is about 19 to 21% of the JSON debug
+      view on the corpus. JTYU-OBC is 13.7 MB against 70.9 MB of JSON, and
+      zone fills, at 8 bytes per vertex, are most of what remains. The
+      corpus gate round-trips every complete document through the pack.</li>
   </ul>
 
   <h2>Slice 0 contract decisions</h2>
@@ -940,11 +978,10 @@
       63 s, down from about 196 s, and the backplane's 9 s, down from
       67 s.</li>
   </ul>
-  <p>Still to do in slice 5:</p>
+  <p>Done in slice 5 since: the packed column writer and reader (see
+  Packed encoding). Still to do:</p>
   <ul>
     <li>a prepared-board API that keeps decoding across requests;</li>
-    <li>the packed column writer and reader, with byte offsets in the chunk
-      index;</li>
     <li>scope pushdown into <code>PcbSelection</code>.</li>
   </ul>
 

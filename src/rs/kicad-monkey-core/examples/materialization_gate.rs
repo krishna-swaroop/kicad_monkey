@@ -107,6 +107,7 @@ fn main() {
     if serde_json::to_string(&again).ok().as_deref() != Some(text.as_str()) {
         fail("output is not deterministic");
     }
+    let pack_bytes = check_pack(&complete, &text);
     let slice_keys: Vec<String> = complete
         .stack
         .slices
@@ -144,6 +145,7 @@ fn main() {
         "profile": profile_summary(&value),
         "materials": material_counts(&value),
         "json_bytes": text.len(),
+        "pack_bytes": pack_bytes,
     });
     println!("{summary}");
 }
@@ -213,6 +215,29 @@ fn check_scopes(
             });
         }
     });
+}
+
+/// The complete document packs deterministically and reads back exactly.
+fn check_pack(
+    complete: &kicad_monkey_contracts::generated::materialization_document::MaterializationDocumentA0,
+    text: &str,
+) -> usize {
+    use kicad_monkey_materialization_pack::{PackLimits, PackReader, encode_pack};
+    let bytes = encode_pack(complete).unwrap_or_else(|error| fail(&error.to_string()));
+    if encode_pack(complete).ok().as_deref() != Some(bytes.as_slice()) {
+        fail("pack is not deterministic");
+    }
+    let limits = PackLimits {
+        max_header_bytes: bytes.len(),
+    };
+    let reader = PackReader::open(&bytes, limits).unwrap_or_else(|error| fail(&error.to_string()));
+    let decoded = reader
+        .document()
+        .unwrap_or_else(|error| fail(&error.to_string()));
+    if serde_json::to_string(&decoded).ok().as_deref() != Some(text) {
+        fail("pack does not round-trip");
+    }
+    bytes.len()
 }
 
 fn check_rule_two(
