@@ -284,16 +284,177 @@ fn request(products: &[&str], max_source_bytes: &str) -> MaterializationRequestA
     .expect("request decodes")
 }
 
+/// Three-layer board: a rotated footprint with an SMD rect pad and a plated
+/// round through-hole pad, a track, a track arc, a through via, and a stored
+/// zone fill.
+const BOARD: &str = r#"(kicad_pcb
+  (version 20240108)
+  (generator pcbnew)
+  (general (thickness 1.6))
+  (layers
+    (0 "F.Cu" signal)
+    (1 "In1.Cu" signal)
+    (31 "B.Cu" signal)
+    (36 "B.SilkS" user "b.silkscreen"))
+  (net 0 "")
+  (net 1 "GND")
+  (net 2 "VCC")
+  (footprint "Demo:Part"
+    (layer "F.Cu")
+    (at 10 20 90)
+    (property "Reference" "U1")
+    (uuid fp-u1)
+    (pad "1" smd rect (at 1 0 90) (size 1 0.5) (layers "F.Cu" "F.Paste" "F.Mask") (net 1 "GND")
+      (uuid pad-u1-1))
+    (pad "2" thru_hole circle (at -1 0 90) (size 1.2 1.2) (drill 0.6) (layers "*.Cu" "*.Mask")
+      (net 2 "VCC") (uuid pad-u1-2)))
+  (segment (start 1 2) (end 3 2) (width 0.25) (layer "F.Cu") (net 1) (uuid trk-1))
+  (arc (start 0 0) (mid 1 1) (end 2 0) (width 0.2) (layer "B.Cu") (net 2) (uuid arc-1))
+  (via (at 5 6) (size 0.8) (drill 0.4) (layers "F.Cu" "B.Cu") (net 1) (uuid via-1))
+  (zone (net 1) (net_name "GND") (layers "In1.Cu") (uuid zone-1)
+    (polygon (pts (xy 0 0) (xy 20 0) (xy 20 20) (xy 0 20)))
+    (filled_polygon (layer "In1.Cu") (pts (xy 0 0) (xy 20 0) (xy 20 20) (xy 0 20))))
+)
+"#;
+
+fn complete_request() -> MaterializationRequestA0 {
+    request(
+        &[
+            "components",
+            "copper",
+            "dielectric",
+            "holes",
+            "paste",
+            "silkscreen",
+            "solder_mask",
+        ],
+        "1048576",
+    )
+}
+
 #[test]
-fn producer_returns_a_valid_scoped_document() {
-    let source = "(kicad_pcb (version 20240108))";
-    let document = materialize_board(source, &request(&["copper", "holes"], "1024"))
-        .expect("request is accepted");
+fn producer_materializes_copper_holes_nets_and_binding() {
+    let document = materialize_board(BOARD, &complete_request()).expect("board materializes");
     validate_materialization_document(&document).expect("producer output is valid");
-    assert!(!document.scope.complete);
-    assert_eq!(document.source.source_bytes, source.len().to_string());
-    assert_eq!(document.source.sha256.len(), 64);
-    assert_eq!(document.diagnostics.len(), 2);
+    assert!(document.scope.complete);
+    let slices: Vec<&str> = document
+        .stack
+        .slices
+        .iter()
+        .map(|slice| slice.key.as_str())
+        .collect();
+    assert_eq!(slices, ["copper.front", "copper.in1", "copper.back"]);
+    let nets: Vec<&str> = document.nets.iter().map(|net| net.key.as_str()).collect();
+    assert_eq!(nets, ["", "GND", "VCC"]);
+
+    let value = serde_json::to_value(&document).expect("serialize");
+    let operations = value["operations"].as_array().expect("operations");
+    let count = |kind: &str, field: &str| {
+        operations
+            .iter()
+            .filter(|operation| operation["kind"] == kind && operation["shape"]["kind"] == field)
+            .count()
+    };
+    // track + arc are swept paths; the via lands on 3 slices; the TH pad on 3.
+    assert_eq!(count("surface", "swept_path_2d"), 2);
+    assert_eq!(count("surface", "disk_2d"), 3 + 3);
+    assert_eq!(count("surface", "rect_2d"), 1);
+    assert_eq!(count("surface", "planar_region_2d"), 1);
+    assert_eq!(count("hole", "disk_2d"), 2);
+    assert_eq!(
+        document.binding.len(),
+        operations.len(),
+        "every operation is bound"
+    );
+    assert_eq!(document.components.len(), 1);
+    assert_eq!(
+        document.diagnostics.len(),
+        4,
+        "four products are not yet materialized"
+    );
+}
+
+#[test]
+fn pads_compose_the_footprint_transform_and_bind_to_their_pins() {
+    let document = materialize_board(BOARD, &complete_request()).expect("board materializes");
+    let value = serde_json::to_value(&document).expect("serialize");
+    let smd = value["operations"]
+        .as_array()
+        .and_then(|operations| {
+            operations
+                .iter()
+                .find(|operation| operation["shape"]["kind"] == "rect_2d")
+        })
+        .expect("the SMD land");
+    // Local (1, 0) rotated by -90 degrees about the footprint at (10, 20).
+    assert_eq!(smd["affine"]["tx_nm"], 10_000_000);
+    assert_eq!(smd["affine"]["ty_nm"], 19_000_000);
+    assert_eq!(smd["slice_key"], "copper.front");
+    assert_eq!(smd["net_key"], "GND");
+    let index = smd["index"].as_u64().expect("index");
+    let entry = document
+        .binding
+        .iter()
+        .find(|entry| u64::from(entry.operation_index) == index)
+        .expect("binding entry");
+    assert_eq!(entry.refdes.as_deref(), Some("U1"));
+    assert_eq!(entry.pad_number.as_deref(), Some("1"));
+
+    let hole = value["operations"]
+        .as_array()
+        .and_then(|operations| {
+            operations
+                .iter()
+                .find(|operation| operation["kind"] == "hole" && operation["net_key"] == "VCC")
+        })
+        .expect("the plated pad hole");
+    assert_eq!(hole["start_slice_key"], "copper.front");
+    assert_eq!(hole["end_slice_key"], "copper.back");
+    assert_eq!(hole["plating"], "plated");
+}
+
+#[test]
+fn selective_materialization_equals_the_filtered_complete_one() {
+    let complete = materialize_board(BOARD, &complete_request()).expect("complete");
+    for (products, slices, nets) in [
+        (vec!["copper"], vec![], vec![]),
+        (vec!["copper", "holes"], vec!["copper.back"], vec![]),
+        (vec!["holes"], vec![], vec!["GND"]),
+        (
+            vec!["copper", "components"],
+            vec!["copper.in1"],
+            vec!["GND"],
+        ),
+    ] {
+        let mut wanted = request(&products, "1048576");
+        wanted.slice_keys = slices.iter().map(|key| (*key).to_owned()).collect();
+        wanted.net_keys = nets.iter().map(|key| (*key).to_owned()).collect();
+        let selective = materialize_board(BOARD, &wanted).expect("selective");
+        validate_materialization_document(&selective).expect("selective output is valid");
+        let filtered = filter_document(&complete, &selective.scope);
+        assert_eq!(
+            serde_json::to_value(&selective).expect("serialize"),
+            serde_json::to_value(&filtered).expect("serialize"),
+            "rule 2 for products {products:?}, slices {slices:?}, nets {nets:?}"
+        );
+    }
+}
+
+#[test]
+fn producer_output_is_byte_deterministic() {
+    let first = materialize_board(BOARD, &complete_request()).expect("first");
+    let second = materialize_board(BOARD, &complete_request()).expect("second");
+    assert_eq!(
+        serde_json::to_string(&first).expect("serialize"),
+        serde_json::to_string(&second).expect("serialize")
+    );
+}
+
+#[test]
+fn producer_rejects_a_board_without_copper_layers() {
+    let error = materialize_board("(kicad_pcb (version 20240108))", &complete_request())
+        .expect_err("no copper layers");
+    assert_eq!(error.code, "no_copper_layers");
 }
 
 #[test]

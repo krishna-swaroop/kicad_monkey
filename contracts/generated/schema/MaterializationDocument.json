@@ -450,6 +450,9 @@
                 "message": {
                     "type": "string"
                 },
+                "product": {
+                    "$ref": "#/$defs/MaterialProduct"
+                },
                 "source_uid": {
                     "type": "string"
                 }
@@ -461,7 +464,8 @@
             ],
             "unevaluatedProperties": {
                 "not": {}
-            }
+            },
+            "description": "A finding of the producer. `product` scopes it so selective results filter it like operations."
         },
         "MaterialProduct": {
             "type": "string",

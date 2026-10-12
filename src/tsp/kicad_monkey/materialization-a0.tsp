@@ -411,10 +411,12 @@ enum DiagnosticSeverity {
   error,
 }
 
+/** A finding of the producer. `product` scopes it so selective results filter it like operations. */
 model MaterializationDiagnostic {
   severity: DiagnosticSeverity;
   code: string;
   message: string;
+  product?: MaterialProduct;
   source_uid?: string;
 }
 

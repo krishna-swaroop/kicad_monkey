@@ -1353,12 +1353,13 @@ pub struct MaterializationCoordinateSystem {
     pub x_axis: ::std::string::String,
     pub y_axis: ::std::string::String,
 }
-///`MaterializationDiagnostic`
+///A finding of the producer. `product` scopes it so selective results filter it like operations.
 ///
 /// <details><summary>JSON schema</summary>
 ///
 /// ```json
 ///{
+///  "description": "A finding of the producer. `product` scopes it so selective results filter it like operations.",
 ///  "type": "object",
 ///  "required": [
 ///    "code",
@@ -1371,6 +1372,9 @@ pub struct MaterializationCoordinateSystem {
 ///    },
 ///    "message": {
 ///      "type": "string"
+///    },
+///    "product": {
+///      "$ref": "#/$defs/MaterialProduct"
 ///    },
 ///    "severity": {
 ///      "$ref": "#/$defs/DiagnosticSeverity"
@@ -1388,6 +1392,12 @@ pub struct MaterializationCoordinateSystem {
 pub struct MaterializationDiagnostic {
     pub code: ::std::string::String,
     pub message: ::std::string::String,
+    #[serde(
+        default,
+        deserialize_with = "crate::deserialize_present_nonnull",
+        skip_serializing_if = "::std::option::Option::is_none"
+    )]
+    pub product: ::std::option::Option<MaterialProduct>,
     pub severity: DiagnosticSeverity,
     #[serde(
         default,

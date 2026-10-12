@@ -1670,6 +1670,7 @@ class MaterializationDiagnostic(Struct, forbid_unknown_fields=True, frozen=True)
     severity: DiagnosticSeverity
     code: str
     message: str
+    product: MaterialProduct | UnsetType = field(default=UNSET)
     source_uid: str | UnsetType = field(default=UNSET)
 
 

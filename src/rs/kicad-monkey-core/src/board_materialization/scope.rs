@@ -181,6 +181,11 @@ pub fn filter_document(
     if !filter.products.contains(&MaterialProduct::Components) {
         document.components.clear();
     }
+    document.diagnostics.retain(|diagnostic| {
+        diagnostic
+            .product
+            .is_none_or(|product| filter.products.contains(&product))
+    });
     document.scope = scope.clone();
     document
 }

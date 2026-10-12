@@ -325,6 +325,71 @@
       the JSON, with sorted keys. It is not parsed back.</li>
   </ul>
 
+  <h2>Slice 1 status</h2>
+  <p>Slice 1 emits the copper and holes products. Copper covers tracks,
+  track arcs, via lands on each flashed layer, stored zone fills, and pad
+  lands. Holes cover vias and pads. Slice 1 also emits the net table, a
+  binding entry for every operation, and component records. Conductor
+  slices are named <code>copper.front</code>, <code>copper.inN</code>, and
+  <code>copper.back</code>. The full stack follows in slice 2.</p>
+  <h3>Decisions</h3>
+  <ul>
+    <li><strong>Placement.</strong> Via lands and holes are local shapes
+      centred on the origin and placed by a translation affine. This makes
+      them instanceable. Tracks and zone fills keep the identity affine and
+      board coordinates.</li>
+    <li><strong>Custom pads.</strong> A custom pad emits its anchor shape
+      as well as each primitive. Polygon primitives keep authored arcs as
+      arc segments. Cubic Bézier strokes have no a0 shape, so they are
+      lowered to 24 line segments of one swept path.</li>
+    <li><strong>Conditional flashing.</strong> Pads and vias that remove
+      unused layers, keep end layers, or carry zone-layer connections take
+      their flashed layers from core's board plot facts. Presentation forms
+      are blanked first. The document records this with a
+      <code>plot_facts_flash_layers</code> diagnostic.</li>
+    <li><strong>Scoped diagnostics.</strong> Diagnostics carry an optional
+      <code>product</code>. A selective result keeps only the diagnostics of
+      its products, so rule 2 holds for diagnostics as well as for
+      operations.</li>
+    <li><strong>Exact bounds.</strong> Disks, annuli, and capsules placed by
+      a similarity affine get exact bounds. Other shapes use the transformed
+      local box, which is exact for rectangles and conservative for curved
+      shapes.</li>
+    <li><strong>Undecodable zones.</strong> A copper zone that fails to
+      decode is reported as <code>zone_not_decoded</code>. It is never
+      dropped silently.</li>
+  </ul>
+  <h3>Evidence</h3>
+  <p>These results come from <code>examples/materialization_gate.rs</code>
+  and a comparison against KiCad-Prism's v2 analytic producer on the same
+  sources. The comparison script stays local.</p>
+  <table>
+    <thead><tr><th>Board</th><th>Operations</th><th>Time</th><th>Copper (source, layer) keys vs Prism</th><th>Holes vs Prism</th></tr></thead>
+    <tbody>
+      <tr><td>4-ch-backplane</td><td>22,185</td><td>0.31 s</td><td>19,925 identical; 192 bounds tighter, all inside</td><td>2,171 identical</td></tr>
+      <tr><td>speedy_processing_module</td><td>16,540</td><td>0.53 s</td><td>15,369 identical</td><td>1,163 identical</td></tr>
+      <tr><td>charge_indicator</td><td>1,566</td><td>0.04 s</td><td>1,433 identical</td><td>133 identical</td></tr>
+      <tr><td>taillight</td><td>1,128</td><td>0.03 s</td><td>1,065 identical</td><td>63 identical</td></tr>
+      <tr><td>JTYU-OBC (34.9 MB)</td><td>30,805</td><td>1.13 s</td><td>28,158 identical</td><td>1,986 identical</td></tr>
+    </tbody>
+  </table>
+  <p>Notes on these results:</p>
+  <ul>
+    <li><strong>Matching.</strong> "Identical" means the same set of
+      (source UID, KiCad layer) pairs, with union bounds within 2 nm. Each
+      board also validates against a0, has a binding entry for every
+      operation, and gives byte-identical output on a repeat run. Rule 2
+      held for every per-slice scope of copper, holes, and both
+      together.</li>
+    <li><strong>Timing.</strong> The time column is a single
+      release-build materialization of the complete board. The Python
+      prototype took 6.98 s on JTYU-OBC.</li>
+    <li><strong>What the comparison does not check.</strong> It compares
+      layers and bounds, not shape parameters. Per-vertex comparison of the
+      lowered geometry needs a lowering consumer and moves to the
+      <code>prism-geometry</code> work.</li>
+  </ul>
+
   <h2>Porting from KiCad-Prism's analytic producer</h2>
   <p><code>prism-kicad-native</code> (<code>materialize.rs</code>,
   <code>analytic_contract.rs</code>) already emits analytic copper and

@@ -383,9 +383,13 @@ export interface ChunkEntry {
   first_operation_index: number;
   operation_count: number;
 }
+/**
+ * A finding of the producer. `product` scopes it so selective results filter it like operations.
+ */
 export interface MaterializationDiagnostic {
   severity: DiagnosticSeverity;
   code: string;
   message: string;
+  product?: MaterialProduct;
   source_uid?: string;
 }

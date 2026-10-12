@@ -7,12 +7,22 @@
 //! `subtract` operations that consumers resolve. Design:
 //! `docs/design/rust-pcb-analytic-materializer.html`.
 //!
-//! Slice 0 provides the request boundary, the shared chunking and scope
-//! rules, and the debug views. Products are emitted by later slices.
+//! Implemented products: copper (tracks, track arcs, via lands, stored zone
+//! fills, pad lands) and holes (vias and pads), with nets, binding, and
+//! component records. Other products are reported as not yet materialized.
 
 mod chunking;
+mod emit;
+mod flash;
+mod geometry;
+mod holes;
+mod nets;
+mod pads;
+mod producer;
+mod routing;
 mod scope;
 mod sexpr_view;
+mod stack;
 
 pub use chunking::{
     chunk_operations, operation_bounds, operation_net, operation_product, operation_slice,
@@ -21,8 +31,9 @@ pub use scope::{filter_document, scope_from_request};
 pub use sexpr_view::materialization_sexpr;
 
 use kicad_monkey_contracts::generated::materialization_document::{
-    DiagnosticSeverity, MaterializationCoordinateSystem, MaterializationDiagnostic,
-    MaterializationDocumentA0, MaterializationProducer, MaterializationSource, Stack,
+    DiagnosticSeverity, MaterialProduct, MaterializationCoordinateSystem,
+    MaterializationDiagnostic, MaterializationDocumentA0, MaterializationProducer,
+    MaterializationSource, Stack,
 };
 use kicad_monkey_contracts::generated::materialization_request::MaterializationRequestA0;
 use sha2::{Digest, Sha256};
@@ -53,34 +64,81 @@ impl fmt::Display for MaterializationError {
 
 impl std::error::Error for MaterializationError {}
 
-fn error(code: &'static str, message: impl Into<String>) -> MaterializationError {
+pub(crate) fn error(code: &'static str, message: impl Into<String>) -> MaterializationError {
     MaterializationError {
         code,
         message: message.into(),
     }
 }
 
-/// Materialize one board source for `request`.
-///
-/// Slice 0 validates the request, records source identity and scope, and
-/// reports every requested product as not yet materialized. The returned
-/// document is valid against the a0 contract.
+/// Products this producer emits; the rest are reported as diagnostics.
+const IMPLEMENTED: [MaterialProduct; 3] = [
+    MaterialProduct::Copper,
+    MaterialProduct::Holes,
+    MaterialProduct::Components,
+];
+
+/// Materialize one board source for `request`. The result is valid against
+/// the a0 contract and equals the complete materialization filtered by the
+/// request's scope.
 pub fn materialize_board(
     source: &str,
     request: &MaterializationRequestA0,
 ) -> Result<MaterializationDocumentA0, MaterializationError> {
     validate_request(source, request)?;
-    let diagnostics = request
-        .products
+    let scope = scope_from_request(request);
+    let emitted = producer::emit_board(source, &scope.products)?;
+    let limit = usize::try_from(request.max_operations).unwrap_or(usize::MAX);
+    if emitted.emitter.operations.len() > limit {
+        return Err(error(
+            "too_many_operations",
+            format!("board needs more than max_operations ({limit})"),
+        ));
+    }
+    let mut diagnostics = emitted.emitter.diagnostics;
+    diagnostics.extend(
+        scope
+            .products
+            .iter()
+            .filter(|product| !IMPLEMENTED.contains(product))
+            .map(|product| MaterializationDiagnostic {
+                severity: DiagnosticSeverity::Warning,
+                code: "product_not_materialized".to_owned(),
+                message: format!("product {product} is not materialized by this producer yet"),
+                product: Some(*product),
+                source_uid: None,
+            }),
+    );
+    let order = emitted
+        .slices
         .iter()
-        .map(|product| MaterializationDiagnostic {
-            severity: DiagnosticSeverity::Warning,
-            code: "product_not_materialized".to_owned(),
-            message: format!("product {product} is not materialized by this producer yet"),
-            source_uid: None,
-        })
+        .map(|slice| (slice.key.clone(), slice.order))
         .collect();
-    Ok(empty_document(source, request, diagnostics))
+    let chunked = chunk_operations(emitted.emitter.operations, &order, *scope.tile_size_nm);
+    let mut document = empty_document(source, request, diagnostics);
+    document.stack.slices = emitted.slices;
+    document.nets = emitted.nets;
+    document.components = emitted.components;
+    document.binding = remap_binding(emitted.emitter.binding, &chunked.new_index_of_input);
+    document.operations = chunked.operations;
+    document.chunks = chunked.chunks;
+    Ok(filter_document(&document, &scope))
+}
+
+fn remap_binding(
+    mut binding: Vec<kicad_monkey_contracts::generated::materialization_document::BindingEntry>,
+    new_index_of_input: &[u32],
+) -> Vec<kicad_monkey_contracts::generated::materialization_document::BindingEntry> {
+    for entry in &mut binding {
+        if let Some(index) = usize::try_from(entry.operation_index)
+            .ok()
+            .and_then(|input| new_index_of_input.get(input))
+        {
+            entry.operation_index = *index;
+        }
+    }
+    binding.sort_by_key(|entry| entry.operation_index);
+    binding
 }
 
 fn validate_request(

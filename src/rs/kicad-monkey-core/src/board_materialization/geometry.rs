@@ -1,0 +1,271 @@
+//! Unit conversion, affines, and analytic bounds for materialized shapes.
+
+use crate::pcb::PcbPoint;
+use kicad_monkey_contracts::generated::materialization_document::{
+    Affine2D, Contour, Nm, NmBounds, NmPoint, PathSegment, Shape2d,
+};
+
+const NM_PER_MM: f64 = 1_000_000.0;
+
+/// Millimetres to nanometres, rounded and saturated to KiCad's 32-bit range.
+pub(crate) fn nm(value_mm: f64) -> i32 {
+    let scaled = (value_mm * NM_PER_MM).round();
+    if scaled.is_nan() {
+        return 0;
+    }
+    scaled.clamp(f64::from(i32::MIN), f64::from(i32::MAX)) as i32
+}
+
+pub(crate) fn nm_point(x_mm: f64, y_mm: f64) -> NmPoint {
+    NmPoint([Nm(nm(x_mm)), Nm(nm(y_mm))])
+}
+
+pub(crate) fn pcb_point(point: PcbPoint) -> NmPoint {
+    nm_point(point.x, point.y)
+}
+
+pub(crate) fn origin() -> NmPoint {
+    NmPoint([Nm(0), Nm(0)])
+}
+
+pub(crate) fn identity() -> Affine2D {
+    rotation_translation(0.0, 0.0, 0.0)
+}
+
+/// Rotation by `angle_deg` about the local origin, then translation to
+/// (`x_mm`, `y_mm`). Matches the KiCad-Prism analytic producer's convention.
+pub(crate) fn rotation_translation(angle_deg: f64, x_mm: f64, y_mm: f64) -> Affine2D {
+    let angle = angle_deg.to_radians();
+    let (sin, cos) = snap_trig(angle.sin(), angle.cos());
+    Affine2D {
+        m11: cos,
+        m12: -sin,
+        m21: sin,
+        m22: cos,
+        tx_nm: Nm(nm(x_mm)),
+        ty_nm: Nm(nm(y_mm)),
+    }
+}
+
+/// Snap trig values that are within rounding noise of -1, 0, or 1 so right
+/// angles produce exact matrices and byte-stable output.
+fn snap_trig(sin: f64, cos: f64) -> (f64, f64) {
+    let snap = |value: f64| {
+        for exact in [-1.0, 0.0, 1.0] {
+            if (value - exact).abs() < 1e-12 {
+                return exact;
+            }
+        }
+        value
+    };
+    (snap(sin), snap(cos))
+}
+
+/// Rotate a millimetre point by `angle_deg`.
+pub(crate) fn rotate_mm(x: f64, y: f64, angle_deg: f64) -> (f64, f64) {
+    let angle = angle_deg.to_radians();
+    (
+        x * angle.cos() - y * angle.sin(),
+        x * angle.sin() + y * angle.cos(),
+    )
+}
+
+fn apply(affine: &Affine2D, x: i64, y: i64) -> (i64, i64) {
+    let (xf, yf) = (x as f64, y as f64);
+    (
+        (affine.m11 * xf + affine.m12 * yf).round() as i64 + i64::from(*affine.tx_nm),
+        (affine.m21 * xf + affine.m22 * yf).round() as i64 + i64::from(*affine.ty_nm),
+    )
+}
+
+/// Local bounds (min_x, min_y, max_x, max_y) of an analytic shape.
+fn local_bounds(shape: &Shape2d) -> [i64; 4] {
+    match shape {
+        Shape2d::Disk2d(disk) => around(&disk.center_nm, *disk.radius_nm),
+        Shape2d::Annulus2d(annulus) => around(&annulus.center_nm, *annulus.outer_radius_nm),
+        Shape2d::Rect2d(rect) => centred(&rect.center_nm, *rect.width_nm, *rect.height_nm),
+        Shape2d::RoundedRect2d(rect) => centred(&rect.center_nm, *rect.width_nm, *rect.height_nm),
+        Shape2d::ChamferedRect2d(rect) => centred(&rect.center_nm, *rect.width_nm, *rect.height_nm),
+        Shape2d::Trapezoid2d(trapezoid) => centred(
+            &trapezoid.center_nm,
+            *trapezoid.width_nm + i64::from(*trapezoid.delta_y_nm).abs(),
+            *trapezoid.height_nm + i64::from(*trapezoid.delta_x_nm).abs(),
+        ),
+        Shape2d::Capsule2d(capsule) => grow(
+            span(&[&capsule.start_nm, &capsule.end_nm]),
+            *capsule.radius_nm,
+        ),
+        Shape2d::SweptPath2d(path) => grow(
+            path_bounds(&path.start_nm, &path.segments),
+            *path.width_nm / 2 + 1,
+        ),
+        Shape2d::PlanarRegion2d(region) => contour_bounds(&region.outer),
+    }
+}
+
+fn xy(point: &NmPoint) -> (i64, i64) {
+    (i64::from(*point.0[0]), i64::from(*point.0[1]))
+}
+
+fn around(center: &NmPoint, radius: i64) -> [i64; 4] {
+    let (x, y) = xy(center);
+    [x - radius, y - radius, x + radius, y + radius]
+}
+
+fn centred(center: &NmPoint, width: i64, height: i64) -> [i64; 4] {
+    let (x, y) = xy(center);
+    let (half_w, half_h) = ((width.abs() + 1) / 2, (height.abs() + 1) / 2);
+    [x - half_w, y - half_h, x + half_w, y + half_h]
+}
+
+fn grow(bounds: [i64; 4], amount: i64) -> [i64; 4] {
+    [
+        bounds[0] - amount,
+        bounds[1] - amount,
+        bounds[2] + amount,
+        bounds[3] + amount,
+    ]
+}
+
+fn span(points: &[&NmPoint]) -> [i64; 4] {
+    points
+        .iter()
+        .fold([i64::MAX, i64::MAX, i64::MIN, i64::MIN], |bounds, point| {
+            let (x, y) = xy(point);
+            [
+                bounds[0].min(x),
+                bounds[1].min(y),
+                bounds[2].max(x),
+                bounds[3].max(y),
+            ]
+        })
+}
+
+fn merge(a: [i64; 4], b: [i64; 4]) -> [i64; 4] {
+    [
+        a[0].min(b[0]),
+        a[1].min(b[1]),
+        a[2].max(b[2]),
+        a[3].max(b[3]),
+    ]
+}
+
+/// Bounds of a line/arc path; arcs contribute their full circle's box when
+/// the three points are not collinear, which is conservative and cheap.
+fn path_bounds(start: &NmPoint, segments: &[PathSegment]) -> [i64; 4] {
+    let mut bounds = span(&[start]);
+    let mut previous = start.clone();
+    for segment in segments {
+        match segment {
+            PathSegment::LineSegment(line) => {
+                bounds = merge(bounds, span(&[&line.end_nm]));
+                previous = line.end_nm.clone();
+            }
+            PathSegment::ArcSegment(arc) => {
+                bounds = merge(bounds, arc_bounds(&previous, &arc.mid_nm, &arc.end_nm));
+                previous = arc.end_nm.clone();
+            }
+        }
+    }
+    bounds
+}
+
+fn contour_bounds(contour: &Contour) -> [i64; 4] {
+    path_bounds(&contour.start_nm, &contour.segments)
+}
+
+/// Circumcircle box of a three-point arc, or the point span when collinear.
+pub(crate) fn arc_bounds(start: &NmPoint, mid: &NmPoint, end: &NmPoint) -> [i64; 4] {
+    match circumcircle(start, mid, end) {
+        Some((cx, cy, radius)) => {
+            let r = radius.ceil() as i64;
+            let (cx, cy) = (cx.round() as i64, cy.round() as i64);
+            merge([cx - r, cy - r, cx + r, cy + r], span(&[start, end]))
+        }
+        None => span(&[start, mid, end]),
+    }
+}
+
+/// Centre and radius of the circle through three points, if not collinear.
+pub(crate) fn circumcircle(a: &NmPoint, b: &NmPoint, c: &NmPoint) -> Option<(f64, f64, f64)> {
+    let (ax, ay) = xy(a);
+    let (bx, by) = xy(b);
+    let (cx, cy) = xy(c);
+    let (ax, ay, bx, by, cx, cy) = (
+        ax as f64, ay as f64, bx as f64, by as f64, cx as f64, cy as f64,
+    );
+    let determinant = 2.0 * (ax * (by - cy) + bx * (cy - ay) + cx * (ay - by));
+    let chord = (cx - ax).hypot(cy - ay).max((bx - ax).hypot(by - ay));
+    if determinant.abs() <= chord * 1e-6 {
+        return None;
+    }
+    let (sa, sb, sc) = (ax * ax + ay * ay, bx * bx + by * by, cx * cx + cy * cy);
+    let ux = (sa * (by - cy) + sb * (cy - ay) + sc * (ay - by)) / determinant;
+    let uy = (sa * (cx - bx) + sb * (ax - cx) + sc * (bx - ax)) / determinant;
+    Some((ux, uy, (ax - ux).hypot(ay - uy)))
+}
+
+/// Uniform scale of a similarity affine (rotation, reflection, uniform
+/// scale), or `None` when the affine shears or scales non-uniformly.
+fn similarity_scale(affine: &Affine2D) -> Option<f64> {
+    let column_x = affine.m11.hypot(affine.m21);
+    let column_y = affine.m12.hypot(affine.m22);
+    let orthogonal = (affine.m11 * affine.m12 + affine.m21 * affine.m22).abs();
+    ((column_x - column_y).abs() < 1e-9 && orthogonal < 1e-9).then_some(column_x)
+}
+
+/// Exact bounds of round shapes under a similarity: transform the centre
+/// (or capsule ends) and grow by the scaled radius.
+fn round_bounds(shape: &Shape2d, affine: &Affine2D) -> Option<[i64; 4]> {
+    let scale = similarity_scale(affine)?;
+    let radius = |value: i64| (value as f64 * scale).ceil() as i64;
+    let place = |point: &NmPoint| {
+        let (x, y) = xy(point);
+        apply(affine, x, y)
+    };
+    let disc = |center: &NmPoint, r: i64| {
+        let (x, y) = place(center);
+        [x - r, y - r, x + r, y + r]
+    };
+    match shape {
+        Shape2d::Disk2d(disk) => Some(disc(&disk.center_nm, radius(*disk.radius_nm))),
+        Shape2d::Annulus2d(annulus) => {
+            Some(disc(&annulus.center_nm, radius(*annulus.outer_radius_nm)))
+        }
+        Shape2d::Capsule2d(capsule) => {
+            let r = radius(*capsule.radius_nm);
+            Some(merge(disc(&capsule.start_nm, r), disc(&capsule.end_nm, r)))
+        }
+        _ => None,
+    }
+}
+
+/// Board-frame bounds of `shape` after `affine`.
+pub(crate) fn board_bounds(shape: &Shape2d, affine: &Affine2D) -> NmBounds {
+    let [min_x, min_y, max_x, max_y] =
+        round_bounds(shape, affine).unwrap_or_else(|| box_bounds(shape, affine));
+    let clamp = |value: i64| Nm(value.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32);
+    NmBounds {
+        min_x_nm: clamp(min_x),
+        min_y_nm: clamp(min_y),
+        max_x_nm: clamp(max_x),
+        max_y_nm: clamp(max_y),
+    }
+}
+
+/// Bounds of the transformed local box; exact for rectangles, conservative
+/// for curved shapes.
+fn box_bounds(shape: &Shape2d, affine: &Affine2D) -> [i64; 4] {
+    let local = local_bounds(shape);
+    let corners = [
+        apply(affine, local[0], local[1]),
+        apply(affine, local[2], local[1]),
+        apply(affine, local[2], local[3]),
+        apply(affine, local[0], local[3]),
+    ];
+    let min_x = corners.iter().map(|corner| corner.0).min().unwrap_or(0);
+    let min_y = corners.iter().map(|corner| corner.1).min().unwrap_or(0);
+    let max_x = corners.iter().map(|corner| corner.0).max().unwrap_or(0);
+    let max_y = corners.iter().map(|corner| corner.1).max().unwrap_or(0);
+    [min_x, min_y, max_x, max_y]
+}
