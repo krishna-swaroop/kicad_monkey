@@ -1231,7 +1231,7 @@
             "unevaluatedProperties": {
                 "not": {}
             },
-            "description": "Closed contour of line, arc, and cubic segments. The last segment returns to `start_nm`."
+            "description": "Closed contour of line, arc, and cubic segments starting at `start_nm`.\nWhen the last segment does not end at `start_nm`, a straight closing\nsegment back to it is implied."
         },
         "LineSegment": {
             "type": "object",

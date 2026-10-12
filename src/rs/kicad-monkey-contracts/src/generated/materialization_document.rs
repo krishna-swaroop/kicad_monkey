@@ -688,13 +688,15 @@ pub struct Component {
     pub side: BoardSide,
     pub source_uid: ::std::string::String,
 }
-///Closed contour of line, arc, and cubic segments. The last segment returns to `start_nm`.
+/**Closed contour of line, arc, and cubic segments starting at `start_nm`.
+When the last segment does not end at `start_nm`, a straight closing
+segment back to it is implied.*/
 ///
 /// <details><summary>JSON schema</summary>
 ///
 /// ```json
 ///{
-///  "description": "Closed contour of line, arc, and cubic segments. The last segment returns to `start_nm`.",
+///  "description": "Closed contour of line, arc, and cubic segments starting at `start_nm`.\nWhen the last segment does not end at `start_nm`, a straight closing\nsegment back to it is implied.",
 ///  "type": "object",
 ///  "required": [
 ///    "segments",

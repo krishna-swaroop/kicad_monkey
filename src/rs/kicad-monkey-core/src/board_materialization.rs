@@ -8,17 +8,22 @@
 //! `docs/design/rust-pcb-analytic-materializer.html`.
 //!
 //! Implemented products: copper (tracks, track arcs, via lands, stored zone
-//! fills, pad lands) and holes (vias and pads), with nets, binding, and
+//! fills, pad lands), holes (vias and pads, with protection and
+//! back-drill), and dielectric (the closed board profile per dielectric
+//! slice, minus crossing holes), with the full stack, nets, binding, and
 //! component records. Other products are reported as not yet materialized.
 
 mod chunking;
+mod dielectric;
 mod emit;
 mod flash;
 mod geometry;
 mod holes;
+mod layers;
 mod nets;
 mod pads;
 mod producer;
+mod profile;
 mod routing;
 mod scope;
 mod sexpr_view;
@@ -72,9 +77,10 @@ pub(crate) fn error(code: &'static str, message: impl Into<String>) -> Materiali
 }
 
 /// Products this producer emits; the rest are reported as diagnostics.
-const IMPLEMENTED: [MaterialProduct; 3] = [
+const IMPLEMENTED: [MaterialProduct; 4] = [
     MaterialProduct::Copper,
     MaterialProduct::Holes,
+    MaterialProduct::Dielectric,
     MaterialProduct::Components,
 ];
 
@@ -110,13 +116,14 @@ pub fn materialize_board(
             }),
     );
     let order = emitted
+        .stack
         .slices
         .iter()
         .map(|slice| (slice.key.clone(), slice.order))
         .collect();
     let chunked = chunk_operations(emitted.emitter.operations, &order, *scope.tile_size_nm);
     let mut document = empty_document(source, request, diagnostics);
-    document.stack.slices = emitted.slices;
+    document.stack = emitted.stack;
     document.nets = emitted.nets;
     document.components = emitted.components;
     document.binding = remap_binding(emitted.emitter.binding, &chunked.new_index_of_input);

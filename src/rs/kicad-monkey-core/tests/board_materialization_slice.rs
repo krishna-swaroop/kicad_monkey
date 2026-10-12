@@ -343,7 +343,30 @@ fn producer_materializes_copper_holes_nets_and_binding() {
         .iter()
         .map(|slice| slice.key.as_str())
         .collect();
-    assert_eq!(slices, ["copper.front", "copper.in1", "copper.back"]);
+    assert_eq!(
+        slices,
+        [
+            "silkscreen.front",
+            "paste.front",
+            "mask.front",
+            "copper.front",
+            "dielectric.1",
+            "copper.in1",
+            "dielectric.2",
+            "copper.back",
+            "mask.back",
+            "paste.back",
+            "silkscreen.back"
+        ],
+        "no stackup: explicit default stack"
+    );
+    assert!(
+        document
+            .stack
+            .slices
+            .iter()
+            .all(|slice| slice.thickness_nm.is_none())
+    );
     let nets: Vec<&str> = document.nets.iter().map(|net| net.key.as_str()).collect();
     assert_eq!(nets, ["", "GND", "VCC"]);
 
@@ -367,10 +390,21 @@ fn producer_materializes_copper_holes_nets_and_binding() {
         "every operation is bound"
     );
     assert_eq!(document.components.len(), 1);
+    let mut codes: Vec<&str> = document
+        .diagnostics
+        .iter()
+        .map(|d| d.code.as_str())
+        .collect();
+    codes.sort_unstable();
     assert_eq!(
-        document.diagnostics.len(),
-        4,
-        "four products are not yet materialized"
+        codes,
+        [
+            "outline_absent",
+            "product_not_materialized",
+            "product_not_materialized",
+            "product_not_materialized",
+            "stackup_absent"
+        ]
     );
 }
 
@@ -529,4 +563,176 @@ fn decoding_rejects_a_mislabelled_cubic_segment() {
     };
     assert!(decode_materialization_document_a0(with_segment("arc").as_bytes()).is_err());
     assert!(decode_materialization_document_a0(with_segment("cubic").as_bytes()).is_ok());
+}
+
+/// Two-layer board with a full stackup, an outline drawn as two board lines,
+/// one board arc, and one footprint-owned line (edges deliberately out of
+/// order and direction), a circular cutout, a tented and back-drilled via,
+/// and a plated pad hole.
+const STACKED: &str = r#"(kicad_pcb
+  (version 20240108)
+  (generator pcbnew)
+  (general (thickness 1.6))
+  (layers (0 "F.Cu" signal) (31 "B.Cu" signal) (44 "Edge.Cuts" user))
+  (setup
+    (stackup
+      (layer "F.SilkS" (type "Top Silk Screen"))
+      (layer "F.Paste" (type "Top Solder Paste"))
+      (layer "F.Mask" (type "Top Solder Mask") (thickness 0.01) (material "LPI") (epsilon_r 3.3))
+      (layer "F.Cu" (type "copper") (thickness 0.035))
+      (layer "dielectric 1" (type "core") (thickness 1.51) (material "FR4") (epsilon_r 4.5) (loss_tangent 0.02))
+      (layer "B.Cu" (type "copper") (thickness 0.035))
+      (layer "B.Mask" (type "Bottom Solder Mask") (thickness 0.01))
+      (layer "B.Paste" (type "Bottom Solder Paste"))
+      (layer "B.SilkS" (type "Bottom Silk Screen"))
+      (copper_finish "ENIG")))
+  (net 0 "")
+  (net 1 "GND")
+  (footprint "Demo:Edge"
+    (layer "F.Cu")
+    (at 30 0)
+    (property "Reference" "X1")
+    (fp_line (start 0 20) (end 0 0) (stroke (width 0.1) (type solid)) (layer "Edge.Cuts"))
+    (pad "1" thru_hole circle (at -5 10) (size 1.5 1.5) (drill 0.8) (layers "*.Cu") (net 1 "GND")
+      (uuid pad-x1-1)))
+  (gr_line (start 0 0) (end 30 0) (stroke (width 0.1) (type solid)) (layer "Edge.Cuts"))
+  (gr_arc (start 0 20) (mid -5 10) (end 0 0) (stroke (width 0.1) (type solid)) (layer "Edge.Cuts"))
+  (gr_line (start 30 20) (end 0 20) (stroke (width 0.1) (type solid)) (layer "Edge.Cuts"))
+  (gr_circle (center 10 10) (end 11 10) (stroke (width 0.1) (type solid)) (layer "Edge.Cuts"))
+  (via (at 20 5) (size 0.8) (drill 0.4) (layers "F.Cu" "B.Cu") (net 1)
+    (tenting (front yes) (back no))
+    (filling yes)
+    (backdrill (size 0.6) (layers "B.Cu" "F.Cu"))
+    (uuid via-x))
+)
+"#;
+
+#[test]
+fn full_stack_comes_from_the_kicad_stackup() {
+    let document = materialize_board(STACKED, &complete_request()).expect("materializes");
+    validate_materialization_document(&document).expect("valid");
+    let slices: Vec<(&str, Option<i64>)> = document
+        .stack
+        .slices
+        .iter()
+        .map(|slice| {
+            (
+                slice.key.as_str(),
+                slice.thickness_nm.as_ref().map(|value| **value),
+            )
+        })
+        .collect();
+    assert_eq!(
+        slices,
+        [
+            ("silkscreen.front", None),
+            ("paste.front", None),
+            ("mask.front", Some(10_000)),
+            ("copper.front", Some(35_000)),
+            ("dielectric.1", Some(1_510_000)),
+            ("copper.back", Some(35_000)),
+            ("mask.back", Some(10_000)),
+            ("paste.back", None),
+            ("silkscreen.back", None),
+        ]
+    );
+    let core = &document.stack.slices[4];
+    assert_eq!(core.material_name.as_deref(), Some("FR4"));
+    assert_eq!(core.relative_permittivity, Some(4.5));
+    assert_eq!(core.loss_tangent, Some(0.02));
+    assert_eq!(document.stack.copper_finish.as_deref(), Some("ENIG"));
+    assert_eq!(
+        document
+            .stack
+            .board_thickness_nm
+            .as_ref()
+            .map(|value| **value),
+        Some(1_600_000)
+    );
+    assert!(
+        !document
+            .diagnostics
+            .iter()
+            .any(|d| d.code.starts_with("stackup"))
+    );
+}
+
+#[test]
+fn outline_closes_across_board_and_footprint_edges_with_a_cutout() {
+    let request = request(&["dielectric"], "1048576");
+    let document = materialize_board(STACKED, &request).expect("materializes");
+    validate_materialization_document(&document).expect("valid");
+    assert!(
+        document.diagnostics.is_empty(),
+        "{:?}",
+        document.diagnostics
+    );
+    let value = serde_json::to_value(&document).expect("serialize");
+    let operations = value["operations"].as_array().expect("operations");
+    let adds: Vec<&Value> = operations
+        .iter()
+        .filter(|op| op["action"] == "add")
+        .collect();
+    assert_eq!(adds.len(), 1, "one region on the one dielectric slice");
+    let region = &adds[0]["shape"];
+    assert_eq!(region["kind"], "planar_region_2d");
+    assert_eq!(
+        region["outer"]["segments"].as_array().map(Vec::len),
+        Some(4)
+    );
+    assert_eq!(
+        region["holes"].as_array().map(Vec::len),
+        Some(1),
+        "circular cutout"
+    );
+    assert_eq!(adds[0]["slice_key"], "dielectric.1");
+    // Bounds include the arc bulging to x = -5 mm.
+    assert_eq!(adds[0]["bounds"]["min_x_nm"], -5_000_000);
+    let subtracts = operations
+        .iter()
+        .filter(|op| op["action"] == "subtract")
+        .count();
+    assert_eq!(
+        subtracts, 2,
+        "the via and the plated pad hole cross the core"
+    );
+}
+
+#[test]
+fn via_protection_and_backdrill_are_carried_on_the_hole() {
+    let document = materialize_board(STACKED, &request(&["holes"], "1048576")).expect("ok");
+    let value = serde_json::to_value(&document).expect("serialize");
+    let via = value["operations"]
+        .as_array()
+        .and_then(|operations| operations.iter().find(|op| op["protection"].is_object()))
+        .expect("the via hole");
+    assert_eq!(via["protection"]["front"]["tented"], "yes");
+    assert_eq!(via["protection"]["back"]["tented"], "no");
+    assert_eq!(via["protection"]["front"]["covered"], "unspecified");
+    assert_eq!(via["protection"]["filled"], "yes");
+    assert_eq!(via["protection"]["capped"], "unspecified");
+    assert_eq!(
+        via["backdrills"],
+        json!([{ "side": "back", "diameter_nm": 600_000, "until_slice_key": "copper.front" }])
+    );
+}
+
+#[test]
+fn dielectric_is_selectable_and_rule_two_holds() {
+    let complete = materialize_board(STACKED, &complete_request()).expect("complete");
+    for (products, slices) in [
+        (vec!["dielectric"], vec![]),
+        (vec!["dielectric", "holes"], vec!["dielectric.1"]),
+        (vec!["copper", "dielectric"], vec!["copper.back"]),
+    ] {
+        let mut wanted = request(&products, "1048576");
+        wanted.slice_keys = slices.iter().map(|key| (*key).to_owned()).collect();
+        let selective = materialize_board(STACKED, &wanted).expect("selective");
+        let filtered = filter_document(&complete, &selective.scope);
+        assert_eq!(
+            serde_json::to_value(&selective).expect("serialize"),
+            serde_json::to_value(&filtered).expect("serialize"),
+            "rule 2 for {products:?} on {slices:?}"
+        );
+    }
 }

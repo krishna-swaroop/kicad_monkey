@@ -60,6 +60,33 @@ fn shape_counts(document: &Value) -> BTreeMap<String, usize> {
     counts
 }
 
+/// Regions and cutouts on the first dielectric slice, plus stack shape.
+fn profile_summary(document: &Value) -> Value {
+    let first = document["stack"]["slices"]
+        .as_array()
+        .and_then(|slices| slices.iter().find(|slice| slice["role"] == "dielectric"))
+        .and_then(|slice| slice["key"].as_str())
+        .unwrap_or_default()
+        .to_owned();
+    let adds: Vec<&Value> = document["operations"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|op| op["slice_key"] == first.as_str() && op["action"] == "add")
+        .collect();
+    let cutouts: usize = adds
+        .iter()
+        .filter_map(|op| op["shape"]["holes"].as_array().map(Vec::len))
+        .sum();
+    let known_thickness = document["stack"]["slices"].as_array().map_or(0, |slices| {
+        slices
+            .iter()
+            .filter(|s| s["thickness_nm"].is_number())
+            .count()
+    });
+    json!({ "regions": adds.len(), "cutouts": cutouts, "slices_with_thickness": known_thickness })
+}
+
 fn main() {
     let arguments: Vec<String> = std::env::args().skip(1).collect();
     let Some(path) = arguments.first() else {
@@ -88,7 +115,12 @@ fn main() {
         .map(|slice| slice.key.clone())
         .collect();
     for key in &slice_keys {
-        for products in [&["copper"][..], &["holes"][..], &["copper", "holes"][..]] {
+        for products in [
+            &["copper"][..],
+            &["holes"][..],
+            &["copper", "holes"][..],
+            &["dielectric"][..],
+        ] {
             let selective = materialize_board(
                 &source,
                 &request(products, std::slice::from_ref(key), source.len()),
@@ -120,6 +152,7 @@ fn main() {
         "shapes": shape_counts(&value),
         "diagnostics": diagnostics,
         "rule2_scopes_checked": scopes,
+        "profile": profile_summary(&value),
         "json_bytes": text.len(),
     });
     println!("{summary}");

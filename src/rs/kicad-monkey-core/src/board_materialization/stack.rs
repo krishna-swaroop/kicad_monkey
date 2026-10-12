@@ -1,12 +1,9 @@
 //! Conductor slices and KiCad copper-layer resolution.
 //!
-//! Slice 1 emits one conductor slice per copper layer, front to back.
-//! Dielectric, mask, paste, and silkscreen slices join in slice 2.
+//! Copper layers in physical order with their slice keys; the full stack
+//! is built in `layers`.
 
 use crate::pcb::PcbLayer;
-use kicad_monkey_contracts::generated::materialization_document::{
-    BoardSide, SliceRole, StackSlice,
-};
 use std::collections::BTreeMap;
 
 /// Copper layers of one board in physical order with their slice keys.
@@ -29,7 +26,7 @@ fn physical_rank(name: &str) -> Option<u32> {
     }
 }
 
-fn slice_key(name: &str) -> String {
+pub(crate) fn slice_key(name: &str) -> String {
     match name {
         "F.Cu" => "copper.front".to_owned(),
         "B.Cu" => "copper.back".to_owned(),
@@ -97,28 +94,5 @@ impl CopperStack {
 
     fn position(&self, name: &str) -> Option<usize> {
         self.names.iter().position(|candidate| candidate == name)
-    }
-
-    pub(crate) fn slices(&self) -> Vec<StackSlice> {
-        let last = self.names.len().saturating_sub(1);
-        self.names
-            .iter()
-            .enumerate()
-            .map(|(position, name)| StackSlice {
-                key: slice_key(name),
-                role: SliceRole::Conductor,
-                order: u32::try_from(position).unwrap_or(u32::MAX),
-                kicad_layer: Some(name.clone()),
-                side: match position {
-                    0 => Some(BoardSide::Front),
-                    p if p == last => Some(BoardSide::Back),
-                    _ => None,
-                },
-                thickness_nm: None,
-                material_name: None,
-                relative_permittivity: None,
-                loss_tangent: None,
-            })
-            .collect()
     }
 }

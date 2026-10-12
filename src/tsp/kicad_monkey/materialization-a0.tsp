@@ -74,7 +74,11 @@ union PathSegment {
   cubic: CubicSegment,
 }
 
-/** Closed contour of line, arc, and cubic segments. The last segment returns to `start_nm`. */
+/**
+ * Closed contour of line, arc, and cubic segments starting at `start_nm`.
+ * When the last segment does not end at `start_nm`, a straight closing
+ * segment back to it is implied.
+ */
 model Contour {
   start_nm: NmPoint;
   @minItems(1) segments: PathSegment[];

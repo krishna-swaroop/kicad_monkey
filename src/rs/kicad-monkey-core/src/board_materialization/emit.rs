@@ -4,6 +4,7 @@
 //! final indices are assigned by chunking.
 
 use super::geometry::board_bounds;
+use super::holes::HoleSpec;
 use kicad_monkey_contracts::generated::materialization_document::{
     Affine2D, Backdrill, BindingEntry, BindingSourceKind, DiagnosticSeverity, HoleOperation,
     HolePlating, HoleProtection, MaterialAction, MaterialOperation, MaterialProduct,
@@ -11,6 +12,7 @@ use kicad_monkey_contracts::generated::materialization_document::{
 };
 
 /// KiCad object an operation came from.
+#[derive(Clone)]
 pub(crate) struct Origin {
     pub kind: BindingSourceKind,
     pub uid: String,
@@ -32,6 +34,7 @@ impl Origin {
 }
 
 /// Physical facts of one hole besides its shape and placement.
+#[derive(Clone)]
 pub(crate) struct HoleFacts {
     pub plating: HolePlating,
     pub start_slice_key: String,
@@ -39,6 +42,13 @@ pub(crate) struct HoleFacts {
     pub plating_thickness_nm: Option<i64>,
     pub protection: Option<HoleProtection>,
     pub backdrills: Vec<Backdrill>,
+}
+
+/// Material, action, and owning net of a surface operation.
+pub(crate) struct Material {
+    pub material: SurfaceMaterial,
+    pub action: MaterialAction,
+    pub net_key: Option<String>,
 }
 
 #[derive(Default)]
@@ -81,41 +91,54 @@ impl Emitter {
         shape: Shape2d,
         affine: Affine2D,
     ) {
-        let index = self.next_index();
-        let bounds = board_bounds(&shape, &affine);
-        self.operations
-            .push(MaterialOperation::SurfaceOperation(SurfaceOperation {
-                kind: "surface".to_owned(),
-                index,
-                action: MaterialAction::Add,
-                material: SurfaceMaterial::Copper,
-                slice_key: slice_key.to_owned(),
-                net_key: Some(origin.net_key.clone()),
-                shape,
-                affine,
-                bounds,
-            }));
-        self.bind(index, origin, Some(&origin.net_key));
+        let material = Material {
+            material: SurfaceMaterial::Copper,
+            action: MaterialAction::Add,
+            net_key: Some(origin.net_key.clone()),
+        };
+        self.surface(origin, slice_key, material, shape, affine);
     }
 
-    /// Add a hole. Plated holes carry the origin's net; unplated holes none.
-    pub(crate) fn hole(
+    /// Add or subtract `material` on `slice_key`.
+    pub(crate) fn surface(
         &mut self,
         origin: &Origin,
-        facts: HoleFacts,
+        slice_key: &str,
+        material: Material,
         shape: Shape2d,
         affine: Affine2D,
     ) {
         let index = self.next_index();
         let bounds = board_bounds(&shape, &affine);
-        let net_key = matches!(facts.plating, HolePlating::Plated).then(|| origin.net_key.clone());
-        self.bind(index, origin, net_key.as_deref());
+        self.bind(index, origin, material.net_key.as_deref());
+        self.operations
+            .push(MaterialOperation::SurfaceOperation(SurfaceOperation {
+                kind: "surface".to_owned(),
+                index,
+                action: material.action,
+                material: material.material,
+                slice_key: slice_key.to_owned(),
+                net_key: material.net_key,
+                shape,
+                affine,
+                bounds,
+            }));
+    }
+
+    /// Add a hole. Plated holes carry the origin's net; unplated holes none.
+    pub(crate) fn hole(&mut self, spec: &HoleSpec) {
+        let index = self.next_index();
+        let bounds = board_bounds(&spec.shape, &spec.affine);
+        let facts = spec.facts.clone();
+        let net_key =
+            matches!(facts.plating, HolePlating::Plated).then(|| spec.origin.net_key.clone());
+        self.bind(index, &spec.origin, net_key.as_deref());
         self.operations
             .push(MaterialOperation::HoleOperation(HoleOperation {
                 kind: "hole".to_owned(),
                 index,
-                shape,
-                affine,
+                shape: spec.shape.clone(),
+                affine: spec.affine.clone(),
                 plating: facts.plating,
                 start_slice_key: facts.start_slice_key,
                 end_slice_key: facts.end_slice_key,

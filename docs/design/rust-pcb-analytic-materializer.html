@@ -396,6 +396,74 @@
       <code>prism-geometry</code> work.</li>
   </ul>
 
+  <h2>Slice 2 status</h2>
+  <p>Slice 2 adds the full stack, board profile closure, the dielectric
+  product, and hole protection and back-drill.</p>
+  <h3>Decisions</h3>
+  <ul>
+    <li><strong>Stack.</strong> The stack follows the KiCad stackup front to
+      back. The stackup layer type gives each slice its role: silkscreen,
+      paste, solder mask, conductor, or dielectric. Thickness, material,
+      εr, and tanδ are copied only when stated. Keys are
+      <code>silkscreen|paste|mask.front|back</code>, the copper keys, and
+      <code>dielectric.N</code>. The stackup is used only when its copper
+      layers equal the board's copper layers. Otherwise, and when the
+      board has no stackup at all, the stack is an explicit default of the
+      same shape with every physical value unknown. A
+      <code>stackup_absent</code> or <code>stackup_mismatch</code>
+      diagnostic records which case applied. Board thickness and copper
+      finish are recorded.</li>
+    <li><strong>Profile closure.</strong> Board and footprint
+      <code>Edge.Cuts</code> carriers become exact edges in the board frame:
+      lines, arcs, and cubics. Rectangles, circles, and polygons are already
+      closed loops. Open edges are chained end to end within 1 µm, and
+      reversed when needed. Loops below 1e-4 mm² are dropped. Loops nest by
+      even-odd containment: each even-depth loop is a region, and the loops
+      directly inside it are its cutouts, which also handles panels.
+      Unclosed edges are reported as <code>outline_not_closed</code>, and a
+      board with no loop gets <code>outline_absent</code>.</li>
+    <li><strong>Contour closing.</strong> When the last segment of a
+      contour does not end at its start, a straight closing segment is
+      implied.</li>
+    <li><strong>Dielectric.</strong> Each dielectric slice adds every
+      profile region, with its cutouts as holes. It then subtracts the drill
+      shape of every hole whose copper span crosses that slice. Back-drilled
+      enlargements are not yet subtracted separately.</li>
+    <li><strong>Hole protection.</strong> Via tenting, covering, and
+      plugging (per side), filling, and capping are copied as authored, and
+      <code>unspecified</code> defers to the board setup.</li>
+    <li><strong>Back-drill.</strong> Back-drill and tertiary drill records
+      give the drilled side from the start layer, the diameter, and the
+      authored end layer.</li>
+    <li><strong>Plating thickness.</strong> KiCad does not state it, so it
+      stays unknown. It is supplied downstream through
+      <code>prism.materials</code>.</li>
+  </ul>
+  <h3>Evidence</h3>
+  <ul>
+    <li><strong>Profile on the corpus.</strong> Profiles close with no
+      diagnostics on all five corpus boards:
+      <ul>
+        <li>4-ch-backplane: four lines and four arcs, one region.</li>
+        <li>speedy_processing_module: 48 footprint-owned edges, one
+          region.</li>
+        <li>charge_indicator: one region and eight circular cutouts.</li>
+        <li>taillight: one region and eight circular cutouts.</li>
+        <li>JTYU-OBC: one region.</li>
+      </ul>
+      An independent count of each board's <code>Edge.Cuts</code>
+      carriers agrees.</li>
+    <li><strong>Stackups.</strong> Stackups resolve with 9 to 25 slices of
+      known thickness.</li>
+    <li><strong>Rule 2.</strong> Rule 2 held for every per-slice scope of
+      copper, holes, both together, and dielectric: 52 to 116 scopes per
+      board.</li>
+    <li><strong>Tests.</strong> The slice tests cover the stackup mapping, an
+      outline drawn from mixed-direction board and footprint edges with an
+      arc and a cutout, via protection and back-drill, and rule 2 with
+      dielectric.</li>
+  </ul>
+
   <h2>Porting from KiCad-Prism's analytic producer</h2>
   <p><code>prism-kicad-native</code> (<code>materialize.rs</code>,
   <code>analytic_contract.rs</code>) already emits analytic copper and
