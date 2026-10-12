@@ -21,6 +21,8 @@ pub(crate) struct FlashLayers {
     pub vias: HashMap<String, Vec<String>>,
     pub pads: HashMap<String, Vec<String>>,
     pub used_plot_facts: bool,
+    /// Why conditional flashing could not be resolved, when it could not.
+    pub unresolved: Option<String>,
 }
 
 const PRESENTATION_HEADS: [&str; 14] = [
@@ -97,11 +99,32 @@ fn blank_heads(source: &str, heads: &[&str]) -> Result<String, MaterializationEr
     into_source(bytes)
 }
 
+/// Plot limits scaled to the source. Every count in a board is bounded by
+/// its byte length, so these never reject a board the parser accepted,
+/// while still bounding work by the input size.
+fn plot_limits(source_len: usize) -> BoardPlotLimits {
+    let defaults = BoardPlotLimits::default();
+    let count = |default: usize| default.max(source_len);
+    let bytes = |default: usize| default.max(source_len.saturating_mul(2));
+    BoardPlotLimits {
+        max_source_bytes: source_len.saturating_add(1).max(defaults.max_source_bytes),
+        max_depth: defaults.max_depth,
+        max_graphics: count(defaults.max_graphics),
+        max_operations: count(defaults.max_operations),
+        max_points: count(defaults.max_points),
+        max_text_bytes: bytes(defaults.max_text_bytes),
+        max_net_class_bytes: bytes(defaults.max_net_class_bytes),
+        max_metadata_bytes: bytes(defaults.max_metadata_bytes),
+        max_parse_nodes: count(defaults.max_parse_nodes),
+        max_input_points: count(defaults.max_input_points),
+        max_input_polygons: count(defaults.max_input_polygons),
+        max_cache_polygons: count(defaults.max_cache_polygons),
+        max_cache_contours: count(defaults.max_cache_contours),
+    }
+}
+
 fn plot(source: &str) -> Result<crate::board_plotter_ir::BoardPlotDocument, crate::sexpr::Error> {
-    let mut limits = BoardPlotLimits::default();
-    limits.max_source_bytes = limits.max_source_bytes.max(source.len().saturating_add(1));
-    limits.max_operations = limits.max_operations.max(1_000_000);
-    board_plot_document(source, limits)
+    board_plot_document(source, plot_limits(source.len()))
 }
 
 /// Board plot document for technical-layer graphics: routing, zones, pads,
@@ -116,18 +139,7 @@ pub(crate) fn presentation_plot(
     })
     .ok()?;
     let stripped = blank_heads(&stripped, &["pad", "model", "zone"]).ok()?;
-    let mut limits = BoardPlotLimits::default();
-    limits.max_source_bytes = limits
-        .max_source_bytes
-        .max(stripped.len().saturating_add(1));
-    limits.max_graphics = limits.max_graphics.max(1_000_000);
-    limits.max_parse_nodes = limits.max_parse_nodes.max(4_000_000);
-    limits.max_input_points = limits.max_input_points.max(4_000_000);
-    limits.max_input_polygons = limits.max_input_polygons.max(1_000_000);
-    limits.max_metadata_bytes = limits.max_metadata_bytes.max(128 * 1024 * 1024);
-    limits.max_text_bytes = limits.max_text_bytes.max(64 * 1024 * 1024);
-    limits.max_operations = limits.max_operations.max(1_000_000);
-    board_plot_document(&stripped, limits).ok()
+    plot(&stripped).ok()
 }
 
 /// Resolve flash layers, consulting plot facts only when required.
@@ -146,14 +158,19 @@ pub(crate) fn flash_layers(
             || matches!(head, "image" | "dimension" | "target")
     })?;
     let stripped = blank_heads(&stripped, &PRESENTATION_HEADS)?;
-    let document = match plot(&stripped) {
-        Ok(document) => document,
-        Err(_) => {
-            let without_boxes = blank_top_level(&stripped, view, |head| head == "gr_text_box")?;
-            plot(&without_boxes).map_err(|error| super::error("plot_facts", error.to_string()))?
-        }
-    };
-    Ok(collect(document.records))
+    let document = plot(&stripped).or_else(|_| {
+        let without_boxes = blank_top_level(&stripped, view, |head| head == "gr_text_box")?;
+        plot(&without_boxes).map_err(|error| super::error("plot_facts", error.to_string()))
+    });
+    // A board the plotter cannot read keeps every padstack layer, with a
+    // warning, rather than failing the whole materialization.
+    Ok(match document {
+        Ok(document) => collect(document.records),
+        Err(cause) => FlashLayers {
+            unresolved: Some(cause.message),
+            ..FlashLayers::default()
+        },
+    })
 }
 
 fn copper_only(layers: &[String]) -> Vec<String> {

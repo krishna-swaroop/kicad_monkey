@@ -92,6 +92,17 @@ impl CopperStack {
             .collect()
     }
 
+    /// Explicit copper layers in `requested` that this board does not
+    /// declare (wildcards are always known).
+    pub(crate) fn unknown<'a>(&self, requested: &'a [String]) -> Vec<&'a str> {
+        requested
+            .iter()
+            .map(String::as_str)
+            .filter(|name| name.ends_with(".Cu") && !matches!(*name, "*.Cu" | "F&B.Cu"))
+            .filter(|name| self.key(name).is_none())
+            .collect()
+    }
+
     fn position(&self, name: &str) -> Option<usize> {
         self.names.iter().position(|candidate| candidate == name)
     }

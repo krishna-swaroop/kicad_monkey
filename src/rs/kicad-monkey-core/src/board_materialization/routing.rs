@@ -132,9 +132,15 @@ pub(crate) fn route_copper(routes: &[Route], stack: &CopperStack, emitter: &mut 
             continue;
         };
         let Some(slice) = stack.key(layer) else {
+            emitter.unknown_layers(&[layer], &uid);
             continue;
         };
         if route.width_mm <= 0.0 {
+            emitter.warn(
+                "track_without_width",
+                "track has no positive width and is not materialized".to_owned(),
+                Some(uid),
+            );
             continue;
         }
         if route.degenerate {
@@ -172,6 +178,11 @@ pub(crate) fn via_lands(
 ) {
     for via in vias {
         let uid = source_uid("via", via.uuid.as_deref(), via.source_range.start);
+        let unknown = stack.unknown(&via.layers);
+        if !unknown.is_empty() {
+            emitter.unknown_layers(&unknown, &uid);
+            continue;
+        }
         let layers = flash
             .vias
             .get(&uid)
@@ -207,6 +218,9 @@ pub(crate) fn zone_fills(zones: &[PcbZone], stack: &CopperStack, emitter: &mut E
                 _ => polygon.layer.as_str(),
             };
             let Some(slice) = stack.key(layer) else {
+                if layer.ends_with(".Cu") {
+                    emitter.unknown_layers(&[layer], &origin.uid);
+                }
                 continue;
             };
             let points: Vec<_> = polygon

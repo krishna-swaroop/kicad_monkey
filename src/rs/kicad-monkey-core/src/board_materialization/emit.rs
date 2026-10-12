@@ -61,6 +61,10 @@ pub(crate) struct Emitter {
     pub diagnostics: Vec<MaterializationDiagnostic>,
     /// Product that warnings raised now belong to.
     pub product: Option<MaterialProduct>,
+    /// Stop recording operations past this count (see [`Self::overflowed`]).
+    pub cap: Option<usize>,
+    /// Set when an operation was refused because of [`Self::cap`].
+    pub overflowed: bool,
 }
 
 /// Stable source identity: the KiCad UUID, or `kind@byte_offset` when the
@@ -91,6 +95,13 @@ fn grown(bounds: NmBounds, offset_nm: i32, affine: &Affine2D) -> NmBounds {
 }
 
 impl Emitter {
+    /// Whether one more operation fits under the cap; records overflow.
+    fn admit(&mut self) -> bool {
+        let full = self.cap.is_some_and(|cap| self.operations.len() >= cap);
+        self.overflowed |= full;
+        !full
+    }
+
     fn next_index(&self) -> u32 {
         u32::try_from(self.operations.len()).unwrap_or(u32::MAX)
     }
@@ -146,6 +157,9 @@ impl Emitter {
         affine: Affine2D,
         offset_nm: i32,
     ) {
+        if !self.admit() {
+            return;
+        }
         let index = self.next_index();
         let bounds = grown(board_bounds(&shape, &affine), offset_nm, &affine);
         self.bind(index, origin, material.net_key.as_deref());
@@ -167,6 +181,9 @@ impl Emitter {
 
     /// Add a hole. Plated holes carry the origin's net; unplated holes none.
     pub(crate) fn hole(&mut self, spec: &HoleSpec) {
+        if !self.admit() {
+            return;
+        }
         let index = self.next_index();
         let bounds = board_bounds(&spec.shape, &spec.affine);
         let facts = spec.facts.clone();
@@ -188,6 +205,18 @@ impl Emitter {
                 backdrills: facts.backdrills,
                 bounds,
             }));
+    }
+
+    /// Report material on copper layers the board does not declare.
+    pub(crate) fn unknown_layers(&mut self, layers: &[&str], source_uid: &str) {
+        self.warn(
+            "layer_not_in_stack",
+            format!(
+                "{} not a copper layer of this board; the item is not materialized there",
+                layers.join(", ")
+            ),
+            Some(source_uid.to_owned()),
+        );
     }
 
     pub(crate) fn warn(&mut self, code: &str, message: String, source_uid: Option<String>) {

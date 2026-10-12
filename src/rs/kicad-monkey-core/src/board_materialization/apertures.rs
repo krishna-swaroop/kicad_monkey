@@ -130,7 +130,8 @@ pub(crate) fn paste_margin(
         .unwrap_or(board.paste_ratio);
     let (width, height) = size_nm(resolved);
     let along = |size: i64| {
-        let value = margin + (size as f64 * ratio).round() as i64;
+        let grown = margin as f64 + (size as f64 * ratio).round();
+        let value = grown.clamp(-(NM_LIMIT as f64), NM_LIMIT as f64) as i64;
         if resolved.shape == "custom" {
             value
         } else {
@@ -148,6 +149,10 @@ pub(crate) struct Aperture<'a> {
     pub primitive_offset_nm: i32,
 }
 
+/// Largest magnitude a margin or a grown size may take: the 32-bit
+/// nanometre range of the contract.
+const NM_LIMIT: i64 = i32::MAX as i64;
+
 fn mm(value_nm: i64) -> f64 {
     value_nm as f64 / 1_000_000.0
 }
@@ -162,11 +167,20 @@ pub(crate) fn aperture<'a>(
     resolved: &PcbResolvedPadCopperLayer<'a>,
     margin: (i64, i64),
 ) -> Option<Aperture<'a>> {
+    let margin = (
+        margin.0.clamp(-NM_LIMIT, NM_LIMIT),
+        margin.1.clamp(-NM_LIMIT, NM_LIMIT),
+    );
     if resolved.shape == "custom" {
         return Some(custom_aperture(resolved, margin));
     }
     let (width, height) = size_nm(resolved);
-    let plot = (width + 2 * margin.0, height + 2 * margin.1);
+    // Grown sizes saturate at the contract range, and every derived ratio
+    // uses the saturated size, so shapes stay valid.
+    let plot = (
+        (width + 2 * margin.0).min(NM_LIMIT),
+        (height + 2 * margin.1).min(NM_LIMIT),
+    );
     if plot.0 <= 0 || plot.1 <= 0 {
         return None;
     }
@@ -252,6 +266,6 @@ pub(crate) fn via_opening_nm(via: &PcbVia, front: bool, board: &BoardMargins) ->
     } else {
         board.tent_back
     });
-    let diameter = i64::from(nm(via.size)) + 2 * board.mask_nm;
+    let diameter = (i64::from(nm(via.size)) + 2 * board.mask_nm).min(2 * NM_LIMIT);
     (!tented && diameter > 0).then_some(diameter)
 }

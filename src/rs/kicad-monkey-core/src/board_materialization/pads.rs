@@ -22,6 +22,13 @@ use kicad_monkey_contracts::generated::materialization_document::{
     PlanarRegion2d, Rect2d, RectCorner, RoundedRect2d, Shape2d, SweptPath2d, Trapezoid2d,
 };
 
+/// A corner radius or chamfer, clamped in whole nanometres to half the
+/// shorter side as the sides themselves round, so it is always valid.
+fn corner_size(value_mm: f64, width_mm: f64, height_mm: f64) -> NonNegativeNm {
+    let half = (*len(width_mm)).min(*len(height_mm)) / 2;
+    NonNegativeNm((*len(value_mm)).clamp(0, half))
+}
+
 fn len(value_mm: f64) -> NonNegativeNm {
     NonNegativeNm(i64::from(nm(value_mm)).max(0))
 }
@@ -201,7 +208,7 @@ fn standard_shape(resolved: &PcbResolvedPadCopperLayer<'_>) -> Option<Shape2d> {
             center_nm: origin(),
             width_nm: len(width),
             height_nm: len(height),
-            radius_nm: len((short * resolved.roundrect_rratio).clamp(0.0, short / 2.0)),
+            radius_nm: corner_size(short * resolved.roundrect_rratio, width, height),
         })),
         "trapezoid" => Some(Shape2d::Trapezoid2d(Trapezoid2d {
             kind: "trapezoid_2d".to_owned(),
@@ -256,13 +263,13 @@ fn chamfered_rect(resolved: &PcbResolvedPadCopperLayer<'_>, width: f64, height: 
         center_nm: origin(),
         width_nm: len(width),
         height_nm: len(height),
-        chamfer_nm: len((short * resolved.chamfer_ratio).clamp(0.0, short / 2.0)),
+        chamfer_nm: corner_size(short * resolved.chamfer_ratio, width, height),
         chamfered_corners: resolved
             .chamfer_corners
             .iter()
             .filter_map(|name| corner(name))
             .collect(),
-        radius_nm: len((short * resolved.roundrect_rratio).clamp(0.0, short / 2.0)),
+        radius_nm: corner_size(short * resolved.roundrect_rratio, width, height),
     })
 }
 

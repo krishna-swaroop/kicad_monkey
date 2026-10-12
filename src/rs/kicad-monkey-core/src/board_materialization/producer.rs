@@ -95,7 +95,13 @@ fn split_zones(view: &PcbView<'_>, emitter: &mut Emitter) -> (Vec<PcbZone>, Vec<
                 technical.push(zone);
             }
             Ok(_) => {}
-            Err(cause) => emitter.warn("zone_not_decoded", cause.to_string(), None),
+            Err(cause) => {
+                // Unknown zones may be on any layer, so the warning belongs
+                // to no single product.
+                let product = emitter.product.take();
+                emitter.warn("zone_not_decoded", cause.to_string(), None);
+                emitter.product = product;
+            }
         }
     }
     (copper, technical)
@@ -167,10 +173,12 @@ fn warn_footprint_transforms(view: &PcbView<'_>, emitter: &mut Emitter) {
     }
 }
 
-/// Emit `products` of the board in `source`.
+/// Emit `products` of the board in `source`, recording at most
+/// `operation_cap` operations when given.
 pub(crate) fn emit_board(
     source: &str,
     products: &[MaterialProduct],
+    operation_cap: Option<usize>,
 ) -> Result<Emitted, MaterializationError> {
     let view =
         PcbView::parse_selected(source, Default::default(), selection()).map_err(parse_error)?;
@@ -178,7 +186,10 @@ pub(crate) fn emit_board(
     if copper.names.is_empty() {
         return Err(error("no_copper_layers", "board declares no copper layers"));
     }
-    let mut emitter = Emitter::default();
+    let mut emitter = Emitter {
+        cap: operation_cap,
+        ..Emitter::default()
+    };
     warn_footprint_transforms(&view, &mut emitter);
     let sources = load(&view, &mut emitter)?;
     let nets = nets(&view, &sources)?;
@@ -248,6 +259,13 @@ fn emit_copper(
 ) -> Result<(), MaterializationError> {
     let flash = flash_layers(source, view, &sources.vias, &sources.pads)?;
     emitter.product = Some(MaterialProduct::Copper);
+    if let Some(cause) = &flash.unresolved {
+        emitter.warn(
+            "flash_layers_unresolved",
+            format!("conditional pad and via flashing not resolved ({cause}); every padstack layer is kept"),
+            None,
+        );
+    }
     if flash.used_plot_facts {
         emitter.warn(
             "plot_facts_flash_layers",
@@ -274,7 +292,7 @@ fn emit_copper(
 fn hole_specs(sources: &Sources, copper: &CopperStack, emitter: &mut Emitter) -> Vec<HoleSpec> {
     emitter.product = Some(MaterialProduct::Holes);
     let mut holes = Vec::new();
-    via_holes(&sources.vias, copper, &mut holes);
+    via_holes(&sources.vias, copper, &mut holes, emitter);
     let flash = FlashLayers::default();
     let pads = Pads {
         copper,
@@ -383,6 +401,7 @@ fn text_context(source: &str, view: &PcbView<'_>, graphics: &[PcbGraphic]) -> Te
         let facts = FootprintTextFacts {
             unlocked: text.unlocked,
             justify: text.effects.justify,
+            knockout: text.knockout,
         };
         Some((text.uuid?, facts))
     });
@@ -393,6 +412,7 @@ fn text_context(source: &str, view: &PcbView<'_>, graphics: &[PcbGraphic]) -> Te
             let facts = FootprintTextFacts {
                 unlocked: property.unlocked,
                 justify: property.effects.justify,
+                knockout: property.knockout,
             };
             Some((property.uuid?, facts))
         });
@@ -463,6 +483,10 @@ impl Pads<'_> {
             .get(&origin.uid)
             .cloned()
             .unwrap_or_else(|| self.copper.expand(&pad.layers));
+        let unknown = self.copper.unknown(&pad.layers);
+        if !unknown.is_empty() {
+            emitter.unknown_layers(&unknown, &origin.uid);
+        }
         for layer in layers {
             let Some(slice) = self.copper.key(&layer) else {
                 continue;

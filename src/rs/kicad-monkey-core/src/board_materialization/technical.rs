@@ -144,6 +144,7 @@ pub(crate) struct TextContext {
 pub(crate) struct FootprintTextFacts {
     pub unlocked: bool,
     pub justify: Vec<String>,
+    pub knockout: bool,
 }
 
 /// First format version whose footprint text angles are footprint-relative;
@@ -158,11 +159,8 @@ fn footprint_stroke_text(
     context: &TextContext,
     drawn: &mut Drawn,
 ) {
+    let (board_x, board_y) = board_anchor(operation, record);
     let placement = &record.placement;
-    let angle = placement.angle_deg.to_radians();
-    let (x, y) = (operation.x as f64, operation.y as f64);
-    let board_x = x * angle.cos() + y * angle.sin() + placement.x_nm as f64;
-    let board_y = y * angle.cos() - x * angle.sin() + placement.y_nm as f64;
     let text_angle = if context.version < FIRST_FP_AFFINE_TRANSFORM {
         operation.orient_deg
     } else {
@@ -171,13 +169,42 @@ fn footprint_stroke_text(
     let spec = TextSpec::from_board(operation)
         .format(context.version)
         .on_board(
-            board_x.round() as i64,
-            board_y.round() as i64,
+            board_x,
+            board_y,
             text_angle,
             facts.is_some_and(|facts| facts.unlocked),
         )
-        .justified(facts.map_or(&[][..], |facts| &facts.justify));
+        .justified(facts.map_or(&[][..], |facts| &facts.justify))
+        .knockout(facts.is_some_and(|facts| facts.knockout));
     text_shapes(&spec, drawn);
+}
+
+/// Text-box text in a footprint, placed as core's text-box layout does:
+/// the anchor moves with the footprint, the angle adds the footprint's, and
+/// the box's own alignment is kept (it is never kept upright).
+fn footprint_box_text(
+    operation: &BoardTextOperation,
+    record: &BoardFootprintRecord,
+    context: &TextContext,
+    drawn: &mut Drawn,
+) {
+    let (x, y) = board_anchor(operation, record);
+    let angle = (operation.orient_deg + record.placement.angle_deg).rem_euclid(360.0);
+    let spec = TextSpec::from_board(operation)
+        .format(context.version)
+        .on_board(x, y, angle, true);
+    text_shapes(&spec, drawn);
+}
+
+/// A footprint-local text anchor in the board frame.
+fn board_anchor(operation: &BoardTextOperation, record: &BoardFootprintRecord) -> (i64, i64) {
+    let placement = &record.placement;
+    let angle = placement.angle_deg.to_radians();
+    let (x, y) = (operation.x as f64, operation.y as f64);
+    (
+        (x * angle.cos() + y * angle.sin() + placement.x_nm as f64).round() as i64,
+        (y * angle.cos() - x * angle.sin() + placement.y_nm as f64).round() as i64,
+    )
 }
 
 fn footprint_graphics(
@@ -191,12 +218,18 @@ fn footprint_graphics(
         record.placement.y_nm as f64 / 1_000_000.0,
     );
     for (position, operation) in record.operations.iter().enumerate() {
-        let BoardFootprintOperation::Text {
-            operation,
-            metadata,
-        } = operation
-        else {
-            continue;
+        let (metadata, kind) = match operation {
+            BoardFootprintOperation::Text { metadata, .. } => {
+                (metadata, BindingSourceKind::FootprintText)
+            }
+            // Text-box borders are the only footprint geometry the parsed
+            // source graphics do not cover.
+            BoardFootprintOperation::Geometry { metadata, .. }
+                if metadata.data_ref == "fp_text_box" =>
+            {
+                (metadata, BindingSourceKind::FootprintGraphic)
+            }
+            _ => continue,
         };
         let Some(layer) = metadata
             .extra_attrs
@@ -211,17 +244,36 @@ fn footprint_graphics(
         } else {
             metadata.data_uuid.clone()
         };
-        let mut origin = unbound(BindingSourceKind::FootprintText, uid);
+        let mut origin = unbound(kind, uid);
         origin.refdes = Some(record.reference.clone());
-        push(out, layer, origin, placement.clone(), |drawn| {
-            if operation.render_cache.is_none() {
-                let facts = context.texts.get(&metadata.data_uuid);
-                footprint_stroke_text(operation, record, facts, context, drawn);
-            } else {
-                let spec = TextSpec::from_board(operation).format(context.version);
-                text_shapes(&spec, drawn);
-            }
-        });
+        push(
+            out,
+            layer,
+            origin,
+            placement.clone(),
+            |drawn| match operation {
+                BoardFootprintOperation::Geometry { operation, .. } => {
+                    operation_shapes(operation, drawn);
+                }
+                BoardFootprintOperation::Text { operation, .. }
+                    if operation.render_cache.is_some() =>
+                {
+                    let spec = TextSpec::from_board(operation).format(context.version);
+                    text_shapes(&spec, drawn);
+                }
+                BoardFootprintOperation::Text {
+                    operation,
+                    metadata,
+                } if metadata.data_ref == "fp_text_box" => {
+                    footprint_box_text(operation, record, context, drawn);
+                }
+                BoardFootprintOperation::Text { operation, .. } => {
+                    let facts = context.texts.get(&metadata.data_uuid);
+                    footprint_stroke_text(operation, record, facts, context, drawn);
+                }
+                _ => {}
+            },
+        );
     }
 }
 
@@ -417,7 +469,8 @@ fn source_graphic(
             origin: origin.clone(),
             affine: affine.clone(),
             drawn,
-            offset_nm: i32::try_from(margin).unwrap_or_default(),
+            offset_nm: i32::try_from(margin.clamp(i64::from(i32::MIN), i64::from(i32::MAX)))
+                .unwrap_or_default(),
         });
     }
 }

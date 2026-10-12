@@ -616,6 +616,38 @@
           rotated footprint rotates them, and keep their corner radius as
           arcs.</li>
       </ul></li>
+    <li><strong>Review batch 2.</strong>
+      <ul>
+        <li>Board plots run with limits scaled to the source size. If
+          conditional flashing still cannot be resolved, every padstack
+          layer is kept and <code>flash_layers_unresolved</code> is
+          reported; the board no longer fails.</li>
+        <li>Margins and grown sizes saturate at the 32-bit nanometre range,
+          and corner radii clamp in whole nanometres, so extreme margins
+          still give valid shapes.</li>
+        <li>Requests:
+          <ul>
+            <li>An inverted region, or a signed
+              <code>max_source_bytes</code>, is rejected.</li>
+            <li><code>max_operations</code> and <code>max_points</code>
+              bound the returned document.</li>
+            <li>Without slice, net, or region filters, emission stops as
+              soon as the operation limit is passed.</li>
+          </ul></li>
+        <li>Material on undeclared copper layers is reported as
+          <code>layer_not_in_stack</code>. This covers tracks, vias (a via
+          spanning one has no hole), pads, and zone fills. Zero-width
+          tracks are reported as <code>track_without_width</code>.
+          <code>zone_not_decoded</code> belongs to no single
+          product.</li>
+        <li>Footprint knockout text uses the source's
+          <code>knockout</code> flag. Footprint text-box borders are drawn,
+          and their text follows core's text-box layout.</li>
+        <li>Open: text inside text boxes is placed by core's plot document,
+          which differs from KiCad by up to a few millimetres (it is
+          correct without a border on board text boxes). This is tracked
+          for the core plotter, not the materializer.</li>
+      </ul></li>
   </ul>
   <h3>Evidence</h3>
   <ul>

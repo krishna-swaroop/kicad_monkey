@@ -4,7 +4,7 @@
 //! dielectric product (which subtracts them) see the same holes. Plating
 //! thickness is not stated by KiCad and stays unknown.
 
-use super::emit::{HoleFacts, Origin, source_uid};
+use super::emit::{Emitter, HoleFacts, Origin, source_uid};
 use super::geometry::{nm, origin, rotation_translation};
 use super::nets::net_key;
 use super::pads::{PadFrame, oval};
@@ -107,9 +107,20 @@ fn facts(plating: HolePlating, layers: &[String], stack: &CopperStack) -> Option
     })
 }
 
-pub(crate) fn via_holes(vias: &[PcbVia], stack: &CopperStack, holes: &mut Vec<HoleSpec>) {
+pub(crate) fn via_holes(
+    vias: &[PcbVia],
+    stack: &CopperStack,
+    holes: &mut Vec<HoleSpec>,
+    emitter: &mut Emitter,
+) {
     for via in vias.iter().filter(|via| via.drill > 0.0) {
         let uid = source_uid("via", via.uuid.as_deref(), via.source_range.start);
+        let unknown = stack.unknown(&via.layers);
+        if !unknown.is_empty() {
+            // A span to an undeclared layer has no depth on this board.
+            emitter.unknown_layers(&unknown, &uid);
+            continue;
+        }
         let Some(mut facts) = facts(HolePlating::Plated, &stack.expand(&via.layers), stack) else {
             continue;
         };

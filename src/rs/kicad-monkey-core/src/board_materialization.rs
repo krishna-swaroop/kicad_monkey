@@ -42,9 +42,9 @@ pub use scope::{filter_document, scope_from_request};
 pub use sexpr_view::materialization_sexpr;
 
 use kicad_monkey_contracts::generated::materialization_document::{
-    DiagnosticSeverity, MaterialProduct, MaterializationCoordinateSystem,
+    DiagnosticSeverity, MaterialOperation, MaterialProduct, MaterializationCoordinateSystem,
     MaterializationDiagnostic, MaterializationDocumentA0, MaterializationProducer,
-    MaterializationSource, Stack,
+    MaterializationSource, PathSegment, Shape2d, Stack,
 };
 use kicad_monkey_contracts::generated::materialization_request::MaterializationRequestA0;
 use sha2::{Digest, Sha256};
@@ -102,13 +102,15 @@ pub fn materialize_board(
 ) -> Result<MaterializationDocumentA0, MaterializationError> {
     validate_request(source, request)?;
     let scope = scope_from_request(request);
-    let emitted = producer::emit_board(source, &scope.products)?;
     let limit = usize::try_from(request.max_operations).unwrap_or(usize::MAX);
-    if emitted.emitter.operations.len() > limit {
-        return Err(error(
-            "too_many_operations",
-            format!("board needs more than max_operations ({limit})"),
-        ));
+    // Products are pushed down into emission, so without slice, net, or
+    // region filters the emitted count is the result count, and emission can
+    // stop as soon as it passes the limit.
+    let unfiltered =
+        scope.slice_keys.is_empty() && scope.net_keys.is_empty() && scope.region.is_none();
+    let emitted = producer::emit_board(source, &scope.products, unfiltered.then_some(limit))?;
+    if emitted.emitter.overflowed {
+        return Err(too_many_operations(limit));
     }
     let mut diagnostics = emitted.emitter.diagnostics;
     diagnostics.extend(
@@ -138,7 +140,53 @@ pub fn materialize_board(
     document.binding = remap_binding(emitted.emitter.binding, &chunked.new_index_of_input);
     document.operations = chunked.operations;
     document.chunks = chunked.chunks;
-    Ok(filter_document(&document, &scope))
+    let document = filter_document(&document, &scope);
+    if document.operations.len() > limit {
+        return Err(too_many_operations(limit));
+    }
+    let points: u64 = document.operations.iter().map(operation_points).sum();
+    if points > u64::from(request.max_points) {
+        return Err(error(
+            "too_many_points",
+            format!("result needs more than max_points ({})", request.max_points),
+        ));
+    }
+    Ok(document)
+}
+
+fn too_many_operations(limit: usize) -> MaterializationError {
+    error(
+        "too_many_operations",
+        format!("result needs more than max_operations ({limit})"),
+    )
+}
+
+/// Coordinate points an operation's shape carries: its anchors plus every
+/// segment end, arc mid, and cubic control point.
+fn operation_points(operation: &MaterialOperation) -> u64 {
+    let shape = match operation {
+        MaterialOperation::SurfaceOperation(surface) => &surface.shape,
+        MaterialOperation::HoleOperation(hole) => &hole.shape,
+    };
+    let segments = |segments: &[PathSegment]| -> u64 {
+        segments
+            .iter()
+            .map(|segment| match segment {
+                PathSegment::LineSegment(_) => 1,
+                PathSegment::ArcSegment(_) => 2,
+                PathSegment::CubicSegment(_) => 3,
+            })
+            .sum()
+    };
+    match shape {
+        Shape2d::Capsule2d(_) => 2,
+        Shape2d::SweptPath2d(path) => 1 + segments(&path.segments),
+        Shape2d::PlanarRegion2d(region) => std::iter::once(&region.outer)
+            .chain(&region.holes)
+            .map(|contour| 1 + segments(&contour.segments))
+            .sum(),
+        _ => 1,
+    }
 }
 
 fn remap_binding(
@@ -170,16 +218,27 @@ fn validate_request(
     if request.products.is_empty() {
         return Err(error("empty_scope", "a request names at least one product"));
     }
+    if let Some(region) = &request.region
+        && (*region.min_x_nm > *region.max_x_nm || *region.min_y_nm > *region.max_y_nm)
+    {
+        return Err(error(
+            "invalid_region",
+            "a region's minimum corner is at or below its maximum corner",
+        ));
+    }
     if *request.tile_size_nm <= 0 || *request.tile_size_nm > i64::from(i32::MAX) {
         return Err(error(
             "invalid_tile_size",
             "tile size is a positive 32-bit nanometre length",
         ));
     }
-    let limit: u64 = request
-        .max_source_bytes
-        .parse()
-        .map_err(|_| error("invalid_limit", "max_source_bytes is a decimal uint64"))?;
+    let digits = &request.max_source_bytes;
+    let limit: u64 = digits
+        .bytes()
+        .all(|byte| byte.is_ascii_digit())
+        .then(|| digits.parse().ok())
+        .flatten()
+        .ok_or_else(|| error("invalid_limit", "max_source_bytes is a decimal uint64"))?;
     if u64::try_from(source.len()).map_or(true, |length| length > limit) {
         return Err(error(
             "source_too_large",
