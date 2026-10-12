@@ -905,27 +905,48 @@
       result: about 4%.</li>
     <li>Analytic emission itself: under 3%.</li>
   </ul>
-  <p>The planned fixes, all deterministic, should bring OBC to about
-  0.9 s:</p>
+  <p><strong>Slice 5, first step (done).</strong> After each change, every
+  corpus document was compared byte for byte with the previous one.
+  JTYU-OBC went from 1.77 s and 391 MB to about 0.67 s and 286 MB. The
+  Python prototype took 6.98 s and 350 MB.</p>
   <ul>
-    <li>flash layers from the parsed view;</li>
-    <li>single-pass zone decoding;</li>
-    <li>a family-filtered presentation plot;</li>
-    <li>shared footprint decoding;</li>
-    <li>skipping the filter for complete scopes.</li>
+    <li><strong>Flash layers from the decoded board.</strong> Core's flash
+      resolver, the one its board plotter uses, now runs directly on the
+      decoded footprints, routing, vias, and pads. Before, a whole second
+      plot document was built just to read pad and via layers.</li>
+    <li><strong>Single-pass zone points.</strong> A well-formed
+      <code>(pts (xy x y) ...)</code> list is read in one lexer pass,
+      without a span or scalar list per point. Anything else falls back to
+      the general reader, which keeps its exact results and errors.</li>
+    <li><strong>A smaller presentation plot.</strong> Footprint shapes,
+      pads, models, and zones are blanked before plotting, keeping byte
+      offsets, since only text, text boxes, dimensions, and tables are read
+      from it.</li>
+    <li><strong>No filter pass on product-only requests.</strong> Products
+      are pushed into emission, so the final <code>filter_document</code>
+      runs only for slice, net, or region filters. Rule 2 checks this on
+      every corpus board.</li>
+    <li><strong>Concurrent stages.</strong> These stages run concurrently
+      on scoped threads, which are inline on <code>wasm32</code>:
+      <ul>
+        <li>the presentation plot runs alongside decoding and copper
+          emission;</li>
+        <li>zones decode alongside the other families.</li>
+      </ul>
+      Emission stays sequential, and zone warnings keep their place, so
+      output is byte-identical.</li>
+    <li><strong>Gate.</strong> Rule-2 scopes run on every available core,
+      and each selective document is now validated too. The OBC gate takes
+      63 s, down from about 196 s, and the backplane's 9 s, down from
+      67 s.</li>
   </ul>
-  <p>Parallelism:</p>
+  <p>Still to do in slice 5:</p>
   <ul>
-    <li><strong>Producer:</strong> source decoding, flash layers, and the
-      presentation plot are independent after the parse. They can run on
-      scoped threads behind a non-wasm feature, while emission stays
-      sequential so output stays byte-identical.</li>
-    <li><strong>Gate:</strong> the rule-2 scopes are independent. A
-      threaded loop measured 4.4 times faster.</li>
-    <li><strong>Prepared board:</strong> an API that keeps a prepared board
-      across requests would cut the gate from minutes to seconds.</li>
+    <li>a prepared-board API that keeps decoding across requests;</li>
+    <li>the packed column writer and reader, with byte offsets in the chunk
+      index;</li>
+    <li>scope pushdown into <code>PcbSelection</code>.</li>
   </ul>
-  <p>These belong to slice 5.</p>
 
   <h2>Porting from KiCad-Prism's analytic producer</h2>
   <p><code>prism-kicad-native</code> (<code>materialize.rs</code>,

@@ -107,7 +107,6 @@ fn main() {
     if serde_json::to_string(&again).ok().as_deref() != Some(text.as_str()) {
         fail("output is not deterministic");
     }
-    let mut scopes = 0usize;
     let slice_keys: Vec<String> = complete
         .stack
         .slices
@@ -116,43 +115,13 @@ fn main() {
         .collect();
     // KM_GATE_SKIP_RULE2=1 skips the rule-2 scopes, for quick document dumps.
     let rule_two = std::env::var_os("KM_GATE_SKIP_RULE2").is_none();
-    for key in slice_keys.iter().filter(|_| rule_two) {
-        for products in [
-            &["copper"][..],
-            &["holes"][..],
-            &["copper", "holes"][..],
-            &["dielectric"][..],
-        ] {
-            let selective = materialize_board(
-                &source,
-                &request(products, std::slice::from_ref(key), source.len()),
-            )
-            .unwrap_or_else(|error| fail(&error.to_string()));
-            check_rule_two(&complete, &selective, products, key);
-            scopes += 1;
-        }
-    }
-    // Technical products: every technical slice, one copper slice, and the
-    // whole board, each alone and together with copper.
-    let technical_keys = slice_keys
-        .iter()
-        .filter(|key| !key.starts_with("dielectric") && !key.starts_with("copper.in"))
-        .cloned()
-        .chain(std::iter::once(String::new()));
-    for key in technical_keys.filter(|_| rule_two) {
-        for products in [
-            &["solder_mask"][..],
-            &["paste"][..],
-            &["silkscreen"][..],
-            &["copper", "solder_mask"][..],
-        ] {
-            let slices: Vec<String> = (!key.is_empty()).then(|| key.clone()).into_iter().collect();
-            let selective = materialize_board(&source, &request(products, &slices, source.len()))
-                .unwrap_or_else(|error| fail(&error.to_string()));
-            check_rule_two(&complete, &selective, products, &key);
-            scopes += 1;
-        }
-    }
+    let scopes = if rule_two {
+        rule_two_scopes(&slice_keys)
+    } else {
+        Vec::new()
+    };
+    check_scopes(&source, &complete, &scopes);
+    let scopes = scopes.len();
     if let Some(out) = arguments.get(1) {
         std::fs::write(out, &text).unwrap_or_else(|error| fail(&error.to_string()));
     }
@@ -177,6 +146,73 @@ fn main() {
         "json_bytes": text.len(),
     });
     println!("{summary}");
+}
+
+/// Rule-2 scopes: every slice with copper, holes, both, and dielectric;
+/// then every technical slice, one copper slice, and the whole board with
+/// each technical product, alone and with copper.
+fn rule_two_scopes(slice_keys: &[String]) -> Vec<(&'static [&'static str], Vec<String>)> {
+    let mut scopes: Vec<(&'static [&'static str], Vec<String>)> = Vec::new();
+    for key in slice_keys {
+        for products in [
+            &["copper"][..],
+            &["holes"][..],
+            &["copper", "holes"][..],
+            &["dielectric"][..],
+        ] {
+            scopes.push((products, vec![key.clone()]));
+        }
+    }
+    let technical_keys = slice_keys
+        .iter()
+        .filter(|key| !key.starts_with("dielectric") && !key.starts_with("copper.in"))
+        .cloned()
+        .chain(std::iter::once(String::new()));
+    for key in technical_keys {
+        for products in [
+            &["solder_mask"][..],
+            &["paste"][..],
+            &["silkscreen"][..],
+            &["copper", "solder_mask"][..],
+        ] {
+            scopes.push((
+                products,
+                (!key.is_empty()).then(|| key.clone()).into_iter().collect(),
+            ));
+        }
+    }
+    scopes
+}
+
+/// Materialize each scope, validate it, and check rule 2 against the
+/// complete result, on as many threads as the machine offers.
+fn check_scopes(
+    source: &str,
+    complete: &kicad_monkey_contracts::generated::materialization_document::MaterializationDocumentA0,
+    scopes: &[(&'static [&'static str], Vec<String>)],
+) {
+    let workers = std::thread::available_parallelism().map_or(1, usize::from);
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    std::thread::scope(|threads| {
+        for _ in 0..workers {
+            threads.spawn(|| {
+                loop {
+                    let index = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    let Some((products, slices)) = scopes.get(index) else {
+                        break;
+                    };
+                    let selective =
+                        materialize_board(source, &request(products, slices, source.len()))
+                            .unwrap_or_else(|error| fail(&error.to_string()));
+                    validate_materialization_document(&selective).unwrap_or_else(|error| {
+                        fail(&format!("{products:?} on {slices:?}: {error}"))
+                    });
+                    let key = slices.first().map_or("", String::as_str);
+                    check_rule_two(complete, &selective, products, key);
+                }
+            });
+        }
+    });
 }
 
 fn check_rule_two(

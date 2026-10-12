@@ -450,6 +450,10 @@ fn polygon_points_from_children(
         return Ok(Vec::new());
     };
     let remaining = limits.max_zone_points.saturating_sub(*total);
+    if let Some(decoded) = xy_points_single_pass(source, points, remaining) {
+        *total += decoded.len();
+        return Ok(decoded);
+    }
     let point_spans = direct_children(source, points, remaining, limits).map_err(|error| {
         if error.kind == ErrorKind::ResourceLimit {
             Error::at(
@@ -478,4 +482,41 @@ fn polygon_points_from_children(
     }
     *total += decoded.len();
     Ok(decoded)
+}
+
+/// The common `(pts (xy x y) ...)` read in one lexer pass, without a span or
+/// scalar list per point. `None` for anything else (another element, other
+/// tokens, nesting, more than `remaining` points, a non-finite number), so
+/// the general reader then gives its exact result or error.
+fn xy_points_single_pass(source: &str, pts: &FormSpan, remaining: usize) -> Option<Vec<PcbPoint>> {
+    let mut lexer = Lexer::new(pts.text(source).ok()?);
+    let mut next = || lexer.next()?.ok();
+    let head = (next()?, next()?);
+    if head.0.kind != TokenKind::Left || head.1.lexeme != "pts" {
+        return None;
+    }
+    let mut points = Vec::new();
+    loop {
+        let token = next()?;
+        match token.kind {
+            TokenKind::Right => break,
+            TokenKind::Left if points.len() < remaining => {}
+            _ => return None,
+        }
+        let (xy, x, y, close) = (next()?, next()?, next()?, next()?);
+        let number = |token: &Token<'_>| {
+            matches!(token.kind, TokenKind::Integer | TokenKind::Float)
+                .then(|| token.lexeme.parse::<f64>().ok())
+                .flatten()
+                .filter(|value| value.is_finite())
+        };
+        if xy.kind != TokenKind::Atom || xy.lexeme != "xy" || close.kind != TokenKind::Right {
+            return None;
+        }
+        points.push(PcbPoint {
+            x: number(&x)?,
+            y: number(&y)?,
+        });
+    }
+    next().is_none().then_some(points)
 }

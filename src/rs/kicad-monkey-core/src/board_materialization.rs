@@ -25,6 +25,7 @@ mod holes;
 mod layers;
 mod nets;
 mod pads;
+mod parallel;
 mod producer;
 mod profile;
 mod routing;
@@ -138,7 +139,13 @@ pub fn materialize_board(
     document.binding = remap_binding(emitted.emitter.binding, &chunked.new_index_of_input);
     document.operations = chunked.operations;
     document.chunks = chunked.chunks;
-    let document = filter_document(&document, &scope);
+    // Emission already holds exactly the requested products, so only slice,
+    // net, and region filters need the filter pass (rule 2 checks this).
+    let document = if unfiltered {
+        document
+    } else {
+        filter_document(&document, &scope)
+    };
     if document.operations.len() > limit {
         return Err(too_many_operations(limit));
     }

@@ -2,14 +2,14 @@
 //!
 //! Pads and vias that remove unused layers, keep end layers, or carry
 //! per-zone layer connections flash only where KiCad's board plotter would.
-//! Core's board plot facts are the authority; they are consulted only when a
-//! board uses those options, and only for pad/via apertures. Presentation
-//! forms are blanked first so they cannot fail the plot.
+//! Core's flash resolver (the one its board plotter uses) is the authority,
+//! run on the parsed view only when a board uses those options.
+//!
+//! This module also builds the presentation plot document that places text.
 
 use super::MaterializationError;
 use crate::board_plotter_ir::{
-    BoardFootprintOperation, BoardPlotLimits, BoardPlotRecord, BoardViaOperationKind,
-    board_plot_document,
+    BoardLayerFlashResolver, BoardPlotLimits, FlashInputs, board_plot_document,
 };
 use crate::pcb::{PcbPad, PcbVia, PcbView};
 use crate::sexpr_projection::{Selector, scan_form_spans};
@@ -24,23 +24,6 @@ pub(crate) struct FlashLayers {
     /// Why conditional flashing could not be resolved, when it could not.
     pub unresolved: Option<String>,
 }
-
-const PRESENTATION_HEADS: [&str; 14] = [
-    "zone",
-    "fp_arc",
-    "fp_circle",
-    "fp_curve",
-    "fp_image",
-    "fp_line",
-    "fp_poly",
-    "fp_rect",
-    "fp_text",
-    "fp_text_box",
-    "model",
-    "property",
-    "embedded_files",
-    "embedded_fonts",
-];
 
 fn needs_plot_facts(vias: &[PcbVia], pads: &[PcbPad]) -> bool {
     vias.iter().any(|via| {
@@ -127,9 +110,25 @@ fn plot(source: &str) -> Result<crate::board_plotter_ir::BoardPlotDocument, crat
     board_plot_document(source, plot_limits(source.len()))
 }
 
-/// Board plot document for technical-layer graphics: routing, zones, pads,
-/// and 3D models are blanked first, since they carry no technical-layer
-/// graphics here. `None` when the board cannot be plotted.
+/// Footprint children the presentation plot never needs: pads, models,
+/// zones, and shapes, which the materializer takes from the parsed source.
+/// Text, text boxes (with their borders), and properties stay.
+const PRESENTATION_BLANKED: [&str; 9] = [
+    "pad",
+    "model",
+    "zone",
+    "fp_line",
+    "fp_arc",
+    "fp_circle",
+    "fp_rect",
+    "fp_poly",
+    "fp_curve",
+];
+
+/// Board plot document for text placement: routing, zones, pads, models,
+/// and footprint shapes are blanked first, since only text, text boxes,
+/// dimensions, and tables are read from it. Blanking keeps byte offsets.
+/// `None` when the board cannot be plotted.
 pub(crate) fn presentation_plot(
     source: &str,
     view: &PcbView<'_>,
@@ -138,39 +137,39 @@ pub(crate) fn presentation_plot(
         matches!(head, "segment" | "arc" | "via" | "zone")
     })
     .ok()?;
-    let stripped = blank_heads(&stripped, &["pad", "model", "zone"]).ok()?;
+    let stripped = blank_heads(&stripped, &PRESENTATION_BLANKED).ok()?;
     plot(&stripped).ok()
 }
 
-/// Resolve flash layers, consulting plot facts only when required.
-pub(crate) fn flash_layers(
-    source: &str,
-    view: &PcbView<'_>,
-    vias: &[PcbVia],
-    pads: &[PcbPad],
-) -> Result<FlashLayers, MaterializationError> {
-    if !needs_plot_facts(vias, pads) {
-        return Ok(FlashLayers::default());
+/// Resolve flash layers with core's flash resolver (the one its board
+/// plotter uses) from the decoded board, only when a board needs it.
+pub(crate) fn flash_layers(inputs: &FlashInputs<'_>) -> FlashLayers {
+    if !needs_plot_facts(inputs.vias, inputs.pads) {
+        return FlashLayers::default();
     }
-    let stripped = blank_top_level(source, view, |head| {
-        head == "zone"
-            || head.starts_with("gr_")
-            || matches!(head, "image" | "dimension" | "target")
-    })?;
-    let stripped = blank_heads(&stripped, &PRESENTATION_HEADS)?;
-    let document = plot(&stripped).or_else(|_| {
-        let without_boxes = blank_top_level(&stripped, view, |head| head == "gr_text_box")?;
-        plot(&without_boxes).map_err(|error| super::error("plot_facts", error.to_string()))
-    });
-    // A board the plotter cannot read keeps every padstack layer, with a
-    // warning, rather than failing the whole materialization.
-    Ok(match document {
-        Ok(document) => collect(document.records),
-        Err(cause) => FlashLayers {
-            unresolved: Some(cause.message),
-            ..FlashLayers::default()
-        },
-    })
+    let resolver = BoardLayerFlashResolver::from_decoded(inputs);
+    let uid =
+        |kind: &str, uuid: Option<&str>, start: usize| super::emit::source_uid(kind, uuid, start);
+    FlashLayers {
+        vias: inputs
+            .vias
+            .iter()
+            .map(|via| {
+                let key = uid("via", via.uuid.as_deref(), via.source_range.start);
+                (key, copper_only(&resolver.via_flash_layers(via)))
+            })
+            .collect(),
+        pads: inputs
+            .pads
+            .iter()
+            .map(|pad| {
+                let key = uid("pad", pad.uuid.as_deref(), pad.source_range.start);
+                (key, copper_only(&resolver.pad_item_layers(pad)))
+            })
+            .collect(),
+        used_plot_facts: true,
+        unresolved: None,
+    }
 }
 
 fn copper_only(layers: &[String]) -> Vec<String> {
@@ -179,37 +178,4 @@ fn copper_only(layers: &[String]) -> Vec<String> {
         .filter(|layer| layer.ends_with(".Cu"))
         .cloned()
         .collect()
-}
-
-fn collect(records: Vec<BoardPlotRecord>) -> FlashLayers {
-    let mut layers = FlashLayers {
-        used_plot_facts: true,
-        ..FlashLayers::default()
-    };
-    for record in records {
-        match record {
-            BoardPlotRecord::Via(via) => {
-                let apertures = via
-                    .operations
-                    .iter()
-                    .find(|operation| operation.kind == BoardViaOperationKind::Aperture)
-                    .map(|operation| copper_only(&operation.layers))
-                    .unwrap_or_default();
-                layers.vias.insert(via.uuid, apertures);
-            }
-            BoardPlotRecord::Footprint(footprint) => {
-                for operation in footprint.operations {
-                    if let BoardFootprintOperation::StartBlock(block) = operation
-                        && block.data_ref == "pad"
-                    {
-                        layers
-                            .pads
-                            .insert(block.data_uuid, copper_only(&block.layers));
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-    layers
 }

@@ -9,6 +9,7 @@ use super::holes::{HoleSpec, pad_hole, via_holes};
 use super::layers::board_stack;
 use super::nets::{NetNames, net_table};
 use super::pads::{PadFrame, land, npth_without_copper, place_pad, reference};
+use super::parallel;
 use super::profile::close_profile;
 use super::routing::{route_copper, routes, via_lands, zone_fills};
 use super::source_graphics::copper_graphics;
@@ -19,6 +20,7 @@ use super::technical::{
 };
 use super::{MaterializationError, error};
 use crate::board_plotter_ir::BoardPlotDocument;
+use crate::board_plotter_ir::FlashInputs;
 use crate::pcb::{
     PcbFamily, PcbFootprint, PcbFootprintGraphic, PcbGraphic, PcbGraphicKind, PcbPad,
     PcbRoutingArc, PcbSegment, PcbSelection, PcbSetup, PcbVia, PcbView, PcbZone,
@@ -127,13 +129,32 @@ fn split_zones(view: &PcbView<'_>, emitter: &mut Emitter) -> (Vec<PcbZone>, Vec<
 
 fn load(view: &PcbView<'_>, emitter: &mut Emitter) -> Result<Sources, MaterializationError> {
     emitter.product = Some(MaterialProduct::Copper);
-    let (zones, technical_zones) = split_zones(view, emitter);
+    // Zones decode alongside the other families. Their warnings belong to
+    // no product and keep their place ahead of everything load reports.
+    let ((zones, technical_zones, zone_warnings), families) = parallel::join(
+        || {
+            let mut local = Emitter::default();
+            let (copper, technical) = split_zones(view, &mut local);
+            (copper, technical, local.diagnostics)
+        },
+        || -> Result<_, MaterializationError> {
+            Ok((
+                collect(view.footprints())?,
+                collect(view.pads())?,
+                collect(view.segments())?,
+                collect(view.arcs())?,
+                collect(view.vias())?,
+            ))
+        },
+    );
+    emitter.diagnostics.extend(zone_warnings);
+    let (footprints, pads, segments, arcs, vias) = families?;
     Ok(Sources {
-        footprints: collect(view.footprints())?,
-        pads: collect(view.pads())?,
-        segments: collect(view.segments())?,
-        arcs: collect(view.arcs())?,
-        vias: collect(view.vias())?,
+        footprints,
+        pads,
+        segments,
+        arcs,
+        vias,
         zones,
         technical_zones,
     })
@@ -220,37 +241,29 @@ fn emit_view(
         ..Emitter::default()
     };
     warn_footprint_transforms(view, &mut emitter);
-    let sources = load(view, &mut emitter)?;
-    let nets = nets(view, &sources)?;
-    let setup = view.setup().map_err(parse_error)?;
-    let stack = stack_of(view, setup.as_ref(), &copper, &mut emitter)?;
     let wants = |product: MaterialProduct| products.contains(&product);
     let drawn =
         wants(MaterialProduct::Copper) || TECHNICAL_PRODUCTS.iter().any(|product| wants(*product));
-    let graphics = if drawn {
-        source_graphics(view)?
-    } else {
-        (Vec::new(), Vec::new())
-    };
+    // The text plot document reads only the source, so it is built while the
+    // board is decoded and its copper emitted.
+    let (decoded, document) = parallel::join(
+        || decode_and_emit_copper(view, &copper, products, drawn, &mut emitter),
+        || drawn.then(|| presentation_plot(source, view)).flatten(),
+    );
+    let Decoded {
+        sources,
+        nets,
+        setup,
+        stack,
+        graphics,
+    } = decoded?;
     // Text of every drawn product comes from one plot document.
     let text = drawn.then(|| Text {
         context: text_context(source, view, &graphics.0),
-        document: presentation_plot(source, view),
+        document,
     });
-    if wants(MaterialProduct::Copper) {
-        emit_copper(source, view, &sources, &copper, &mut emitter)?;
-        let names = NetNames::new(&collect(view.nets())?, &nets);
-        copper_graphics(
-            &graphics.0,
-            &graphics.1,
-            &sources.footprints,
-            &copper,
-            &names,
-            &mut emitter,
-        );
-        if let Some(text) = &text {
-            text.emit_copper(&copper, &mut emitter);
-        }
+    if let Some(text) = text.as_ref().filter(|_| wants(MaterialProduct::Copper)) {
+        text.emit_copper(&copper, &mut emitter);
     }
     let regions = profile_regions(view, &sources, products, &mut emitter)?;
     emit_drilled(&sources, &copper, &regions, &stack, products, &mut emitter);
@@ -273,6 +286,54 @@ fn emit_view(
         nets,
         components,
         emitter,
+    })
+}
+
+/// The decoded board, and its graphics when a drawn product needs them.
+struct Decoded {
+    sources: Sources,
+    nets: Vec<Net>,
+    setup: Option<PcbSetup>,
+    stack: Stack,
+    graphics: (Vec<PcbGraphic>, Vec<PcbFootprintGraphic>),
+}
+
+/// Decode the board and emit its copper, all but the text, which needs
+/// the plot document.
+fn decode_and_emit_copper(
+    view: &PcbView<'_>,
+    copper: &CopperStack,
+    products: &[MaterialProduct],
+    drawn: bool,
+    emitter: &mut Emitter,
+) -> Result<Decoded, MaterializationError> {
+    let sources = load(view, emitter)?;
+    let nets = nets(view, &sources)?;
+    let setup = view.setup().map_err(parse_error)?;
+    let stack = stack_of(view, setup.as_ref(), copper, emitter)?;
+    let graphics = if drawn {
+        source_graphics(view)?
+    } else {
+        (Vec::new(), Vec::new())
+    };
+    if products.contains(&MaterialProduct::Copper) {
+        emit_copper(view, &sources, copper, emitter)?;
+        let names = NetNames::new(&collect(view.nets())?, &nets);
+        copper_graphics(
+            &graphics.0,
+            &graphics.1,
+            &sources.footprints,
+            copper,
+            &names,
+            emitter,
+        );
+    }
+    Ok(Decoded {
+        sources,
+        nets,
+        setup,
+        stack,
+        graphics,
     })
 }
 
@@ -304,13 +365,19 @@ fn emit_drilled(
 }
 
 fn emit_copper(
-    source: &str,
     view: &PcbView<'_>,
     sources: &Sources,
     copper: &CopperStack,
     emitter: &mut Emitter,
 ) -> Result<(), MaterializationError> {
-    let flash = flash_layers(source, view, &sources.vias, &sources.pads)?;
+    let flash = flash_layers(&FlashInputs {
+        copper_stack: &copper.names,
+        footprints: &sources.footprints,
+        segments: &sources.segments,
+        arcs: &sources.arcs,
+        vias: &sources.vias,
+        pads: &sources.pads,
+    });
     emitter.product = Some(MaterialProduct::Copper);
     if let Some(cause) = &flash.unresolved {
         emitter.warn(
@@ -322,7 +389,7 @@ fn emit_copper(
     if flash.used_plot_facts {
         emitter.warn(
             "plot_facts_flash_layers",
-            "board plot facts resolved conditional pad and via flashing".to_owned(),
+            "KiCad's connectivity rules resolved conditional pad and via flashing".to_owned(),
             None,
         );
     }
