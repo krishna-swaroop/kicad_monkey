@@ -557,14 +557,17 @@ pub struct ChamferedRect2d {
     pub width_nm: NonNegativeNm,
 }
 /**Operations of one (slice, tile) occupy a contiguous index range. An
-operation belongs to the tile containing the centre of its bounds; the
-chunk bounds cover every operation in it.*/
+operation belongs to the tile containing the centre of its bounds (floor
+division by `tile_size_nm`); the chunk bounds cover every operation in it.
+Chunks are non-empty, start at operation 0, follow each other without
+gaps, and are ordered by slice order, tile row, then tile column.
+`net_keys` are the distinct nets of the chunk's operations, sorted.*/
 ///
 /// <details><summary>JSON schema</summary>
 ///
 /// ```json
 ///{
-///  "description": "Operations of one (slice, tile) occupy a contiguous index range. An\noperation belongs to the tile containing the centre of its bounds; the\nchunk bounds cover every operation in it.",
+///  "description": "Operations of one (slice, tile) occupy a contiguous index range. An\noperation belongs to the tile containing the centre of its bounds (floor\ndivision by `tile_size_nm`); the chunk bounds cover every operation in it.\nChunks are non-empty, start at operation 0, follow each other without\ngaps, and are ordered by slice order, tile row, then tile column.\n`net_keys` are the distinct nets of the chunk's operations, sorted.",
 ///  "type": "object",
 ///  "required": [
 ///    "bounds",
@@ -914,13 +917,14 @@ pub struct Disk2d {
     pub kind: ::std::string::String,
     pub radius_nm: NonNegativeNm,
 }
-///Drilled or milled hole spanning `start_slice_key` to `end_slice_key` inclusive.
+/**Drilled or milled hole spanning the conductor slices `start_slice_key` to
+`end_slice_key` inclusive, in either order.*/
 ///
 /// <details><summary>JSON schema</summary>
 ///
 /// ```json
 ///{
-///  "description": "Drilled or milled hole spanning `start_slice_key` to `end_slice_key` inclusive.",
+///  "description": "Drilled or milled hole spanning the conductor slices `start_slice_key` to\n`end_slice_key` inclusive, in either order.",
 ///  "type": "object",
 ///  "required": [
 ///    "affine",
@@ -1611,12 +1615,17 @@ pub struct MaterializationProducer {
     pub name: ::std::string::String,
     pub version: ::std::string::String,
 }
-///`MaterializationScope`
+/**What a document holds. It is canonical: products are distinct and in
+`MaterialProduct` declaration order, and slice and net keys are distinct
+and sorted by byte value. Every operation, component, and product-tagged
+diagnostic lies within it: a named product, a listed slice (a hole spans
+one), a listed net, and bounds meeting `region`.*/
 ///
 /// <details><summary>JSON schema</summary>
 ///
 /// ```json
 ///{
+///  "description": "What a document holds. It is canonical: products are distinct and in\n`MaterialProduct` declaration order, and slice and net keys are distinct\nand sorted by byte value. Every operation, component, and product-tagged\ndiagnostic lies within it: a named product, a listed slice (a hole spans\none), a listed net, and bounds meeting `region`.",
 ///  "type": "object",
 ///  "required": [
 ///    "complete",
@@ -1625,7 +1634,7 @@ pub struct MaterializationProducer {
 ///  ],
 ///  "properties": {
 ///    "complete": {
-///      "description": "True only when every product, slice, and net was materialized without a region.",
+///      "description": "True exactly when every product is named and there is no slice, net, or region filter.",
 ///      "type": "boolean"
 ///    },
 ///    "net_keys": {
@@ -1662,7 +1671,7 @@ pub struct MaterializationProducer {
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
 #[serde(deny_unknown_fields)]
 pub struct MaterializationScope {
-    ///True only when every product, slice, and net was materialized without a region.
+    ///True exactly when every product is named and there is no slice, net, or region filter.
     pub complete: bool,
     ///Absent means every net.
     #[serde(default, skip_serializing_if = "::std::vec::Vec::is_empty")]
@@ -2933,7 +2942,8 @@ impl ::std::convert::TryFrom<::std::string::String> for SurfaceMaterial {
         value.parse()
     }
 }
-/**Add or remove one shape of material on one slice. Conductive material
+/**Add or remove one shape of material on one slice whose role matches the
+material (copper on conductor slices, and so on). Conductive material
 always carries `net_key`; operations on different nets are never merged.
 
 Operations combine without regard to order. Per slice and material
@@ -2946,7 +2956,7 @@ group's result, minus the union of the ungrouped subtracts.*/
 ///
 /// ```json
 ///{
-///  "description": "Add or remove one shape of material on one slice. Conductive material\nalways carries `net_key`; operations on different nets are never merged.\n\nOperations combine without regard to order. Per slice and material\n(and per net for conductive material), operations that share a\n`group_key` form one item whose subtracts remove only that item's own\nadds; the material is then the union of the ungrouped adds and every\ngroup's result, minus the union of the ungrouped subtracts.",
+///  "description": "Add or remove one shape of material on one slice whose role matches the\nmaterial (copper on conductor slices, and so on). Conductive material\nalways carries `net_key`; operations on different nets are never merged.\n\nOperations combine without regard to order. Per slice and material\n(and per net for conductive material), operations that share a\n`group_key` form one item whose subtracts remove only that item's own\nadds; the material is then the union of the ungrouped adds and every\ngroup's result, minus the union of the ungrouped subtracts.",
 ///  "type": "object",
 ///  "required": [
 ///    "action",
@@ -2966,6 +2976,7 @@ group's result, minus the union of the ungrouped subtracts.*/
 ///      "$ref": "#/$defs/Affine2D"
 ///    },
 ///    "bounds": {
+///      "description": "Board-frame bounds holding the whole shape after `affine` and any growing offset.",
 ///      "$ref": "#/$defs/NmBounds"
 ///    },
 ///    "group_key": {
@@ -3007,6 +3018,7 @@ group's result, minus the union of the ungrouped subtracts.*/
 pub struct SurfaceOperation {
     pub action: MaterialAction,
     pub affine: Affine2D,
+    ///Board-frame bounds holding the whole shape after `affine` and any growing offset.
     pub bounds: NmBounds,
     /**Item that this operation's subtracts are confined to, such as one
     knockout text whose glyph strokes are cut from its own box. It is the

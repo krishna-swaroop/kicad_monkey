@@ -76,3 +76,14 @@ fn decoder_rejects_bad_magic_version_truncation_and_oversize() {
         Err(PackError::HeaderTooLarge(_))
     ));
 }
+
+#[test]
+fn decoder_rejects_a_header_that_breaks_the_contract() {
+    let mut invalid = document();
+    invalid.chunks[0].slice_key = "copper.back".to_owned();
+    let bytes = encode_header(&invalid).expect("encode");
+    match decode_header(&bytes, PackLimits::default()) {
+        Err(PackError::Invalid(error)) => assert_eq!(error.code, "unknown_slice"),
+        other => panic!("expected a contract rejection, got {:?}", other.err()),
+    }
+}

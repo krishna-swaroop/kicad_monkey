@@ -80,8 +80,8 @@ fn example_document() -> MaterializationDocumentA0 {
         "producer": { "name": "slice0-test", "version": "0" },
         "source": { "sha256": "0".repeat(64), "source_bytes": "0" },
         "coordinate_system": { "unit": "nm", "x_axis": "board_right", "y_axis": "board_down" },
-        "scope": { "products": ["components", "copper", "dielectric", "holes", "paste",
-                                "silkscreen", "solder_mask"],
+        "scope": { "products": ["copper", "holes", "dielectric", "solder_mask", "paste",
+                                "silkscreen", "components"],
                    "tile_size_nm": TILE, "complete": true },
         "stack": { "slices": [
             slice("mask.front", "solder_mask", 0),

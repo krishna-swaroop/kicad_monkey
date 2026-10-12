@@ -2,21 +2,36 @@
 //!
 //! Structural decoding already enforces field presence, enum values, and the
 //! literal `kind` of every shape, segment, and operation. This module checks
-//! the cross-record rules the schema cannot express: dense operation indices,
-//! known slice and net references, conductive net ownership, chunk coverage,
-//! binding coverage, and shape parameter sanity.
+//! what decoding does not:
+//!
+//! - the schema's own ranges and lengths that the generated Rust types do
+//!   not carry: every `NonNegativeNm` is in `0..=i32::MAX`, and contours and
+//!   swept paths have segments;
+//! - cross-record rules: dense operation indices, known slice and net
+//!   references, materials on slices of their role, conductive net
+//!   ownership, operations inside the recorded scope, the canonical scope,
+//!   chunk order, tiles, nets, and coverage, binding order, and bounds that
+//!   hold their shape.
+//!
+//! [`validate_materialization_header`] checks the operation-independent part,
+//! for readers (such as the pack header) that see the chunk directory before
+//! any operation.
 //!
 //! Decode documents through [`decode_materialization_document_a0`]. The
 //! workspace enables serde_json's `arbitrary_precision`, under which numbers
 //! buffered inside untagged unions do not decode straight from text; the
 //! decoder parses to a `Value` first, which does.
 
+mod shapes;
+
 use crate::generated::materialization_document::{
-    Affine2D, ChunkEntry, HoleOperation, HolePlating, MaterialOperation, MaterializationDocumentA0,
-    MaterializationScope, NmBounds, Shape2d, SurfaceMaterial, SurfaceOperation,
+    Affine2D, ChunkEntry, HoleOperation, HolePlating, MaterialOperation, MaterialProduct,
+    MaterializationDocumentA0, MaterializationScope, NmBounds, NonNegativeNm, Shape2d, SliceRole,
+    SurfaceMaterial, SurfaceOperation,
 };
 use crate::{ValidationError, validation_error};
-use std::collections::BTreeSet;
+use shapes::{check_bounds_hold_shape, in_length_range, validate_shape};
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 /// Reject a `kind` that differs from the expected literal.
@@ -70,10 +85,27 @@ const SCHEMA: &str = "kicad_monkey.materialization.a0";
 const TYPE: &str = "kicad_monkey.materialization.document";
 const NM_MAX: i64 = i32::MAX as i64;
 
-/// Known slice and net keys of one document.
+/// Every product; a complete materialization names all of them.
+const ALL_PRODUCTS: [MaterialProduct; 7] = [
+    MaterialProduct::Copper,
+    MaterialProduct::Holes,
+    MaterialProduct::Dielectric,
+    MaterialProduct::SolderMask,
+    MaterialProduct::Paste,
+    MaterialProduct::Silkscreen,
+    MaterialProduct::Components,
+];
+
+/// Known slices (with their order and role) and net keys of one document.
 struct Keys<'a> {
-    slices: BTreeSet<&'a str>,
+    slices: BTreeMap<&'a str, (u32, SliceRole)>,
     nets: BTreeSet<&'a str>,
+}
+
+impl Keys<'_> {
+    fn order(&self, key: &str) -> Option<u32> {
+        self.slices.get(key).map(|(order, _)| *order)
+    }
 }
 
 /// Decode JSON bytes and enforce the a0 semantic rules.
@@ -113,19 +145,53 @@ impl std::error::Error for MaterializationDecodeError {
     }
 }
 
-/// Enforce the cross-record rules of `kicad_monkey.materialization.a0`.
+/// Enforce every rule of `kicad_monkey.materialization.a0`.
 pub fn validate_materialization_document(
     document: &MaterializationDocumentA0,
 ) -> Result<(), ValidationError> {
+    let keys = validate_header(document)?;
+    let total: u64 = document
+        .chunks
+        .iter()
+        .map(|chunk| u64::from(chunk.operation_count))
+        .sum();
+    if usize::try_from(total).ok() != Some(document.operations.len()) {
+        return Err(validation_error(
+            "uncovered_operations",
+            "$.chunks",
+            "every operation belongs to exactly one chunk",
+        ));
+    }
+    for (position, operation) in document.operations.iter().enumerate() {
+        validate_operation(position, operation, &document.scope, &keys)?;
+    }
+    validate_binding_nets(document)?;
+    for (position, chunk) in document.chunks.iter().enumerate() {
+        check_chunk_members(document, chunk, position)?;
+    }
+    Ok(())
+}
+
+/// Enforce the rules that hold without operations: identity, scope, stack,
+/// nets, components, diagnostics, the chunk directory, and binding order.
+/// The operation count is taken from the chunk directory, and
+/// `operations` itself is ignored.
+pub fn validate_materialization_header(
+    document: &MaterializationDocumentA0,
+) -> Result<(), ValidationError> {
+    validate_header(document).map(|_| ())
+}
+
+fn validate_header(document: &MaterializationDocumentA0) -> Result<Keys<'_>, ValidationError> {
     validate_identity(document)?;
     validate_scope(&document.scope)?;
     let keys = collect_keys(document)?;
     validate_nets(document, &keys)?;
-    for (position, operation) in document.operations.iter().enumerate() {
-        validate_operation(position, operation, &keys)?;
-    }
-    validate_binding(document)?;
-    validate_chunks(document)
+    validate_components(document)?;
+    validate_diagnostics(document)?;
+    let total = validate_chunk_directory(document, &keys)?;
+    validate_binding_order(document, total)?;
+    Ok(keys)
 }
 
 fn validate_identity(document: &MaterializationDocumentA0) -> Result<(), ValidationError> {
@@ -146,6 +212,12 @@ fn validate_identity(document: &MaterializationDocumentA0) -> Result<(), Validat
     Ok(())
 }
 
+fn strictly_ascending<T: Ord>(values: &[T]) -> bool {
+    values.windows(2).all(|pair| pair[0] < pair[1])
+}
+
+/// The scope is canonical (sorted, distinct lists) and `complete` is true
+/// exactly when every product is named with no slice, net, or region filter.
 fn validate_scope(scope: &MaterializationScope) -> Result<(), ValidationError> {
     if scope.products.is_empty() {
         return Err(validation_error(
@@ -154,14 +226,7 @@ fn validate_scope(scope: &MaterializationScope) -> Result<(), ValidationError> {
             "a materialization names at least one product",
         ));
     }
-    let filtered = !scope.slice_keys.is_empty() || !scope.net_keys.is_empty();
-    if scope.complete && (filtered || scope.region.is_some()) {
-        return Err(validation_error(
-            "inconsistent_scope",
-            "$.scope.complete",
-            "a complete materialization has no slice, net, or region filter",
-        ));
-    }
+    check_canonical_scope(scope)?;
     if *scope.tile_size_nm <= 0 || *scope.tile_size_nm > NM_MAX {
         return Err(validation_error(
             "invalid_tile_size",
@@ -175,20 +240,70 @@ fn validate_scope(scope: &MaterializationScope) -> Result<(), ValidationError> {
     Ok(())
 }
 
+fn check_canonical_scope(scope: &MaterializationScope) -> Result<(), ValidationError> {
+    if !strictly_ascending(&scope.products)
+        || !strictly_ascending(&scope.slice_keys)
+        || !strictly_ascending(&scope.net_keys)
+    {
+        return Err(validation_error(
+            "noncanonical_scope",
+            "$.scope",
+            "scope products, slice keys, and net keys are sorted and distinct",
+        ));
+    }
+    let unfiltered =
+        scope.slice_keys.is_empty() && scope.net_keys.is_empty() && scope.region.is_none();
+    let everything = ALL_PRODUCTS
+        .iter()
+        .all(|product| scope.products.contains(product));
+    if scope.complete != (unfiltered && everything) {
+        return Err(validation_error(
+            "inconsistent_scope",
+            "$.scope.complete",
+            "complete is true exactly when every product is named without filters",
+        ));
+    }
+    Ok(())
+}
+
+fn check_length(value: i64, path: &str) -> Result<(), ValidationError> {
+    if in_length_range(value) {
+        return Ok(());
+    }
+    Err(validation_error(
+        "invalid_length",
+        path.to_owned(),
+        "lengths are non-negative 32-bit nanometre values",
+    ))
+}
+
+fn check_optional_length(value: Option<&NonNegativeNm>, path: &str) -> Result<(), ValidationError> {
+    value.map_or(Ok(()), |value| check_length(**value, path))
+}
+
 fn collect_keys(document: &MaterializationDocumentA0) -> Result<Keys<'_>, ValidationError> {
-    let mut slices = BTreeSet::new();
+    check_optional_length(
+        document.stack.board_thickness_nm.as_ref(),
+        "$.stack.board_thickness_nm",
+    )?;
+    let mut slices = BTreeMap::new();
     for (position, slice) in document.stack.slices.iter().enumerate() {
+        let path = format!("$.stack.slices[{position}]");
         if usize::try_from(slice.order).ok() != Some(position) {
             return Err(validation_error(
                 "invalid_slice_order",
-                format!("$.stack.slices[{position}].order"),
+                format!("{path}.order"),
                 "slices are listed front to back with dense orders",
             ));
         }
-        if !slices.insert(slice.key.as_str()) {
+        check_optional_length(slice.thickness_nm.as_ref(), &format!("{path}.thickness_nm"))?;
+        if slices
+            .insert(slice.key.as_str(), (slice.order, slice.role))
+            .is_some()
+        {
             return Err(validation_error(
                 "duplicate_slice",
-                format!("$.stack.slices[{position}].key"),
+                format!("{path}.key"),
                 "slice keys are unique",
             ));
         }
@@ -210,6 +325,19 @@ fn validate_nets(
     document: &MaterializationDocumentA0,
     keys: &Keys<'_>,
 ) -> Result<(), ValidationError> {
+    for (position, class) in document.net_classes.iter().enumerate() {
+        let path = format!("$.net_classes[{position}]");
+        for (field, value) in [
+            ("track_width_nm", &class.track_width_nm),
+            ("clearance_nm", &class.clearance_nm),
+            ("diff_pair_width_nm", &class.diff_pair_width_nm),
+            ("diff_pair_gap_nm", &class.diff_pair_gap_nm),
+            ("via_diameter_nm", &class.via_diameter_nm),
+            ("via_drill_nm", &class.via_drill_nm),
+        ] {
+            check_optional_length(value.as_ref(), &format!("{path}.{field}"))?;
+        }
+    }
     let classes: BTreeSet<&str> = document
         .net_classes
         .iter()
@@ -242,22 +370,163 @@ fn validate_nets(
     Ok(())
 }
 
+/// Product membership of a record outside the scope's products.
+fn out_of_scope(path: String) -> ValidationError {
+    validation_error(
+        "out_of_scope",
+        path,
+        "records belong to a product, slice, net, and region of the scope",
+    )
+}
+
+fn validate_components(document: &MaterializationDocumentA0) -> Result<(), ValidationError> {
+    let named = document
+        .scope
+        .products
+        .contains(&MaterialProduct::Components);
+    if !document.components.is_empty() && !named {
+        return Err(out_of_scope("$.components".to_owned()));
+    }
+    for (position, component) in document.components.iter().enumerate() {
+        let path = format!("$.components[{position}]");
+        validate_affine(&component.affine, &format!("{path}.affine"))?;
+        if let Some(bounds) = &component.body_bounds {
+            validate_bounds(bounds, &format!("{path}.body_bounds"))?;
+        }
+        check_optional_length(
+            component.body_height_nm.as_ref(),
+            &format!("{path}.body_height_nm"),
+        )?;
+    }
+    Ok(())
+}
+
+fn validate_diagnostics(document: &MaterializationDocumentA0) -> Result<(), ValidationError> {
+    for (position, diagnostic) in document.diagnostics.iter().enumerate() {
+        if diagnostic
+            .product
+            .is_some_and(|product| !document.scope.products.contains(&product))
+        {
+            return Err(out_of_scope(format!("$.diagnostics[{position}].product")));
+        }
+    }
+    Ok(())
+}
+
+/// Product, slice, net, region, and the slice role each material needs.
+fn product_of(operation: &MaterialOperation) -> MaterialProduct {
+    match operation {
+        MaterialOperation::HoleOperation(_) => MaterialProduct::Holes,
+        MaterialOperation::SurfaceOperation(surface) => match surface.material {
+            SurfaceMaterial::Copper => MaterialProduct::Copper,
+            SurfaceMaterial::Dielectric => MaterialProduct::Dielectric,
+            SurfaceMaterial::SolderMask => MaterialProduct::SolderMask,
+            SurfaceMaterial::Paste => MaterialProduct::Paste,
+            SurfaceMaterial::Silkscreen => MaterialProduct::Silkscreen,
+        },
+    }
+}
+
+fn role_of(material: SurfaceMaterial) -> SliceRole {
+    match material {
+        SurfaceMaterial::Copper => SliceRole::Conductor,
+        SurfaceMaterial::Dielectric => SliceRole::Dielectric,
+        SurfaceMaterial::SolderMask => SliceRole::SolderMask,
+        SurfaceMaterial::Paste => SliceRole::Paste,
+        SurfaceMaterial::Silkscreen => SliceRole::Silkscreen,
+    }
+}
+
+fn operation_slice(operation: &MaterialOperation) -> &str {
+    match operation {
+        MaterialOperation::SurfaceOperation(surface) => &surface.slice_key,
+        MaterialOperation::HoleOperation(hole) => &hole.start_slice_key,
+    }
+}
+
+fn operation_bounds(operation: &MaterialOperation) -> &NmBounds {
+    match operation {
+        MaterialOperation::SurfaceOperation(surface) => &surface.bounds,
+        MaterialOperation::HoleOperation(hole) => &hole.bounds,
+    }
+}
+
+fn operation_net(operation: &MaterialOperation) -> Option<&str> {
+    match operation {
+        MaterialOperation::SurfaceOperation(surface) => surface.net_key.as_deref(),
+        MaterialOperation::HoleOperation(hole) => hole.net_key.as_deref(),
+    }
+}
+
 fn validate_operation(
     position: usize,
     operation: &MaterialOperation,
+    scope: &MaterializationScope,
     keys: &Keys<'_>,
 ) -> Result<(), ValidationError> {
     let path = format!("$.operations[{position}]");
     match operation {
         MaterialOperation::SurfaceOperation(surface) => {
             check_index(surface.index, position, &path)?;
-            validate_surface(surface, keys, &path)
+            validate_surface(surface, keys, &path)?;
         }
         MaterialOperation::HoleOperation(hole) => {
             check_index(hole.index, position, &path)?;
-            validate_hole(hole, keys, &path)
+            validate_hole(hole, keys, &path)?;
         }
     }
+    check_in_scope(operation, scope, keys, &path)
+}
+
+/// The operation's product is named, it lies on a selected slice (a hole
+/// spans one), it carries a selected net, and it meets the region.
+fn check_in_scope(
+    operation: &MaterialOperation,
+    scope: &MaterializationScope,
+    keys: &Keys<'_>,
+    path: &str,
+) -> Result<(), ValidationError> {
+    let product = scope.products.contains(&product_of(operation));
+    let selected: BTreeSet<u32> = scope
+        .slice_keys
+        .iter()
+        .filter_map(|key| keys.order(key))
+        .collect();
+    let slice = scope.slice_keys.is_empty()
+        || match operation {
+            MaterialOperation::SurfaceOperation(surface) => {
+                scope.slice_keys.binary_search(&surface.slice_key).is_ok()
+            }
+            MaterialOperation::HoleOperation(hole) => {
+                let span = keys
+                    .order(&hole.start_slice_key)
+                    .zip(keys.order(&hole.end_slice_key));
+                span.is_some_and(|(start, end)| {
+                    selected
+                        .range(start.min(end)..=start.max(end))
+                        .next()
+                        .is_some()
+                })
+            }
+        };
+    let net = scope.net_keys.is_empty()
+        || operation_net(operation)
+            .is_some_and(|net| scope.net_keys.binary_search(&net.to_owned()).is_ok());
+    let region = scope
+        .region
+        .as_ref()
+        .is_none_or(|region| intersects(region, operation_bounds(operation)));
+    if product && slice && net && region {
+        return Ok(());
+    }
+    Err(out_of_scope(path.to_owned()))
+}
+
+fn intersects(a: &NmBounds, b: &NmBounds) -> bool {
+    *a.min_x_nm <= *b.max_x_nm
+        && *b.min_x_nm <= *a.max_x_nm
+        && *a.min_y_nm <= *b.max_y_nm
+        && *b.min_y_nm <= *a.max_y_nm
 }
 
 fn check_index(index: u32, position: usize, path: &str) -> Result<(), ValidationError> {
@@ -276,7 +545,12 @@ fn validate_surface(
     keys: &Keys<'_>,
     path: &str,
 ) -> Result<(), ValidationError> {
-    check_slice(keys, &surface.slice_key, &format!("{path}.slice_key"))?;
+    check_slice_role(
+        keys,
+        &surface.slice_key,
+        role_of(surface.material),
+        &format!("{path}.slice_key"),
+    )?;
     let conductive = matches!(surface.material, SurfaceMaterial::Copper);
     match (&surface.net_key, conductive) {
         (None, true) => {
@@ -296,29 +570,49 @@ fn validate_surface(
         (Some(net), true) => check_net(keys, net, &format!("{path}.net_key"))?,
         (None, false) => {}
     }
-    if surface
-        .offset_nm
-        .as_ref()
-        .is_some_and(|offset| **offset == 0)
-    {
+    let offset = surface.offset_nm.as_ref().map_or(0, |offset| **offset);
+    if surface.offset_nm.is_some() && offset == 0 {
         return Err(validation_error(
             "invalid_offset",
             format!("{path}.offset_nm"),
             "a zero offset is written by omitting offset_nm",
         ));
     }
-    validate_affine(&surface.affine, &format!("{path}.affine"))?;
-    validate_bounds(&surface.bounds, &format!("{path}.bounds"))?;
-    validate_shape(&surface.shape, &format!("{path}.shape"))
+    validate_placed_shape(
+        &surface.shape,
+        &surface.affine,
+        &surface.bounds,
+        i64::from(offset),
+        path,
+    )
+}
+
+fn validate_placed_shape(
+    shape: &Shape2d,
+    affine: &Affine2D,
+    bounds: &NmBounds,
+    offset_nm: i64,
+    path: &str,
+) -> Result<(), ValidationError> {
+    validate_affine(affine, &format!("{path}.affine"))?;
+    validate_bounds(bounds, &format!("{path}.bounds"))?;
+    validate_shape(shape, &format!("{path}.shape"))?;
+    check_bounds_hold_shape(shape, affine, offset_nm, bounds, path)
 }
 
 fn validate_hole(hole: &HoleOperation, keys: &Keys<'_>, path: &str) -> Result<(), ValidationError> {
-    check_slice(
+    check_slice_role(
         keys,
         &hole.start_slice_key,
+        SliceRole::Conductor,
         &format!("{path}.start_slice_key"),
     )?;
-    check_slice(keys, &hole.end_slice_key, &format!("{path}.end_slice_key"))?;
+    check_slice_role(
+        keys,
+        &hole.end_slice_key,
+        SliceRole::Conductor,
+        &format!("{path}.end_slice_key"),
+    )?;
     let plated = matches!(hole.plating, HolePlating::Plated);
     match (&hole.net_key, plated) {
         (Some(net), true) => check_net(keys, net, &format!("{path}.net_key"))?,
@@ -331,12 +625,22 @@ fn validate_hole(hole: &HoleOperation, keys: &Keys<'_>, path: &str) -> Result<()
             ));
         }
     }
+    check_optional_length(
+        hole.plating_thickness_nm.as_ref(),
+        &format!("{path}.plating_thickness_nm"),
+    )?;
     for (position, backdrill) in hole.backdrills.iter().enumerate() {
+        let drill_path = format!("{path}.backdrills[{position}]");
+        check_optional_length(
+            backdrill.diameter_nm.as_ref(),
+            &format!("{drill_path}.diameter_nm"),
+        )?;
         if let Some(slice) = &backdrill.until_slice_key {
-            check_slice(
+            check_slice_role(
                 keys,
                 slice,
-                &format!("{path}.backdrills[{position}].until_slice_key"),
+                SliceRole::Conductor,
+                &format!("{drill_path}.until_slice_key"),
             )?;
         }
     }
@@ -353,20 +657,28 @@ fn validate_hole(hole: &HoleOperation, keys: &Keys<'_>, path: &str) -> Result<()
             "holes are disks, capsules, swept paths, or planar regions",
         ));
     }
-    validate_affine(&hole.affine, &format!("{path}.affine"))?;
-    validate_bounds(&hole.bounds, &format!("{path}.bounds"))?;
-    validate_shape(&hole.shape, &format!("{path}.shape"))
+    validate_placed_shape(&hole.shape, &hole.affine, &hole.bounds, 0, path)
 }
 
-fn check_slice(keys: &Keys<'_>, key: &str, path: &str) -> Result<(), ValidationError> {
-    if keys.slices.contains(key) {
-        return Ok(());
+fn check_slice_role(
+    keys: &Keys<'_>,
+    key: &str,
+    role: SliceRole,
+    path: &str,
+) -> Result<(), ValidationError> {
+    match keys.slices.get(key) {
+        Some((_, actual)) if *actual == role => Ok(()),
+        Some(_) => Err(validation_error(
+            "wrong_slice_role",
+            path.to_owned(),
+            "material lies on a slice of its role; holes span conductor slices",
+        )),
+        None => Err(validation_error(
+            "unknown_slice",
+            path.to_owned(),
+            "operations reference slices listed in the stack",
+        )),
     }
-    Err(validation_error(
-        "unknown_slice",
-        path.to_owned(),
-        "operations reference slices listed in the stack",
-    ))
 }
 
 fn check_net(keys: &Keys<'_>, key: &str, path: &str) -> Result<(), ValidationError> {
@@ -404,95 +716,21 @@ fn validate_bounds(bounds: &NmBounds, path: &str) -> Result<(), ValidationError>
     ))
 }
 
-/// Parameter sanity per shape; the radius and chamfer limits follow from the
-/// shape's own extents.
-fn validate_shape(shape: &Shape2d, path: &str) -> Result<(), ValidationError> {
-    let lengths = shape_lengths(shape, path)?;
-    if lengths.iter().all(|length| (0..=NM_MAX).contains(length)) {
-        return Ok(());
-    }
-    Err(validation_error(
-        "invalid_length",
-        path.to_owned(),
-        "shape lengths are non-negative 32-bit nanometre values",
-    ))
-}
-
-fn shape_lengths(shape: &Shape2d, path: &str) -> Result<Vec<i64>, ValidationError> {
-    Ok(match shape {
-        Shape2d::Disk2d(disk) => vec![*disk.radius_nm],
-        Shape2d::Rect2d(rect) => vec![*rect.width_nm, *rect.height_nm],
-        Shape2d::RoundedRect2d(rect) => {
-            check_corner(*rect.radius_nm, *rect.width_nm, *rect.height_nm, path)?;
-            vec![*rect.width_nm, *rect.height_nm, *rect.radius_nm]
-        }
-        Shape2d::ChamferedRect2d(rect) => {
-            check_corner(*rect.radius_nm, *rect.width_nm, *rect.height_nm, path)?;
-            check_corner(*rect.chamfer_nm, *rect.width_nm, *rect.height_nm, path)?;
-            vec![*rect.width_nm, *rect.height_nm]
-        }
-        Shape2d::Trapezoid2d(trapezoid) => vec![*trapezoid.width_nm, *trapezoid.height_nm],
-        Shape2d::Capsule2d(capsule) => vec![*capsule.radius_nm],
-        Shape2d::Annulus2d(annulus) => {
-            check_annulus(*annulus.inner_radius_nm, *annulus.outer_radius_nm, path)?;
-            vec![*annulus.outer_radius_nm, *annulus.inner_radius_nm]
-        }
-        Shape2d::SweptPath2d(path_shape) => vec![*path_shape.width_nm],
-        Shape2d::PlanarRegion2d(_) => Vec::new(),
-    })
-}
-
-fn check_annulus(inner: i64, outer: i64, path: &str) -> Result<(), ValidationError> {
-    if inner < outer {
-        return Ok(());
-    }
-    Err(validation_error(
-        "invalid_annulus",
-        path.to_owned(),
-        "an annulus inner radius is below its outer radius",
-    ))
-}
-
-fn check_corner(size: i64, width: i64, height: i64, path: &str) -> Result<(), ValidationError> {
-    if size.saturating_mul(2) <= width.min(height) {
-        return Ok(());
-    }
-    Err(validation_error(
-        "invalid_corner",
-        path.to_owned(),
-        "corner radius or chamfer is at most half the shorter side",
-    ))
-}
-
-fn operation_net(operation: &MaterialOperation) -> Option<&str> {
-    match operation {
-        MaterialOperation::SurfaceOperation(surface) => surface.net_key.as_deref(),
-        MaterialOperation::HoleOperation(hole) => hole.net_key.as_deref(),
-    }
-}
-
-/// Binding entries reference existing operations in ascending order and
-/// carry their operation's net key. Coverage is not required: geometry-only
-/// documents may bind a subset (the producer binds every operation).
-fn validate_binding(document: &MaterializationDocumentA0) -> Result<(), ValidationError> {
+/// Binding entries reference operations in ascending order, below the
+/// operation count. Coverage is not required: geometry-only documents may
+/// bind a subset (the producer binds every operation).
+fn validate_binding_order(
+    document: &MaterializationDocumentA0,
+    total: u64,
+) -> Result<(), ValidationError> {
     let mut previous: Option<u32> = None;
     for (position, entry) in document.binding.iter().enumerate() {
-        let operation = usize::try_from(entry.operation_index)
-            .ok()
-            .and_then(|index| document.operations.get(index));
         let ascending = previous.is_none_or(|last| entry.operation_index > last);
-        let Some(operation) = operation.filter(|_| ascending) else {
+        if !ascending || u64::from(entry.operation_index) >= total {
             return Err(validation_error(
                 "invalid_binding",
                 format!("$.binding[{position}].operation_index"),
                 "binding entries reference existing operations in ascending order",
-            ));
-        };
-        if entry.net_key.as_deref() != operation_net(operation) {
-            return Err(validation_error(
-                "invalid_binding",
-                format!("$.binding[{position}].net_key"),
-                "a binding entry carries its operation's net key",
             ));
         }
         previous = Some(entry.operation_index);
@@ -500,64 +738,128 @@ fn validate_binding(document: &MaterializationDocumentA0) -> Result<(), Validati
     Ok(())
 }
 
-/// Chunks cover every operation exactly once, in index order, and each
-/// operation lies on its chunk's slice inside its chunk's bounds.
-fn validate_chunks(document: &MaterializationDocumentA0) -> Result<(), ValidationError> {
-    let mut next = 0usize;
-    for (position, chunk) in document.chunks.iter().enumerate() {
-        let path = format!("$.chunks[{position}]");
-        validate_bounds(&chunk.bounds, &format!("{path}.bounds"))?;
-        let first = usize::try_from(chunk.first_operation_index).ok();
-        let count = usize::try_from(chunk.operation_count).unwrap_or(usize::MAX);
-        if first != Some(next) || count == 0 {
+/// Each binding entry carries its operation's net key.
+fn validate_binding_nets(document: &MaterializationDocumentA0) -> Result<(), ValidationError> {
+    for (position, entry) in document.binding.iter().enumerate() {
+        let operation = usize::try_from(entry.operation_index)
+            .ok()
+            .and_then(|index| document.operations.get(index));
+        if operation.is_none_or(|operation| entry.net_key.as_deref() != operation_net(operation)) {
             return Err(validation_error(
-                "invalid_chunk_range",
-                path,
-                "chunks are non-empty, contiguous, and in operation order",
+                "invalid_binding",
+                format!("$.binding[{position}].net_key"),
+                "a binding entry carries its operation's net key",
             ));
         }
-        let end = next.saturating_add(count);
-        let operations = document.operations.get(next..end).ok_or_else(|| {
-            validation_error(
-                "invalid_chunk_range",
-                path.clone(),
-                "chunk range exceeds operations",
-            )
-        })?;
-        for operation in operations {
-            check_chunk_member(chunk, operation, &path)?;
-        }
-        next = end;
-    }
-    if next != document.operations.len() {
-        return Err(validation_error(
-            "uncovered_operations",
-            "$.chunks",
-            "every operation belongs to exactly one chunk",
-        ));
     }
     Ok(())
 }
 
-fn check_chunk_member(
-    chunk: &ChunkEntry,
-    operation: &MaterialOperation,
-    path: &str,
-) -> Result<(), ValidationError> {
-    let (slice, bounds) = match operation {
-        MaterialOperation::SurfaceOperation(surface) => (&surface.slice_key, &surface.bounds),
-        MaterialOperation::HoleOperation(hole) => (&hole.start_slice_key, &hole.bounds),
-    };
-    let inside = *chunk.bounds.min_x_nm <= *bounds.min_x_nm
-        && *chunk.bounds.min_y_nm <= *bounds.min_y_nm
-        && *chunk.bounds.max_x_nm >= *bounds.max_x_nm
-        && *chunk.bounds.max_y_nm >= *bounds.max_y_nm;
-    if *slice == chunk.slice_key && inside {
-        return Ok(());
+/// Chunks are non-empty, contiguous from index 0, and strictly ordered by
+/// (slice order, tile row, tile column), so each (slice, tile) appears
+/// once. Their slices and nets are known, and their net lists are sorted
+/// and distinct. Returns the operation count the directory covers.
+fn validate_chunk_directory(
+    document: &MaterializationDocumentA0,
+    keys: &Keys<'_>,
+) -> Result<u64, ValidationError> {
+    let mut next = 0u64;
+    let mut previous: Option<(u32, i32, i32)> = None;
+    for (position, chunk) in document.chunks.iter().enumerate() {
+        let path = format!("$.chunks[{position}]");
+        validate_bounds(&chunk.bounds, &format!("{path}.bounds"))?;
+        let Some(order) = keys.order(&chunk.slice_key) else {
+            return Err(validation_error(
+                "unknown_slice",
+                format!("{path}.slice_key"),
+                "chunks reference slices listed in the stack",
+            ));
+        };
+        let key = (order, chunk.tile_y, chunk.tile_x);
+        if u64::from(chunk.first_operation_index) != next
+            || chunk.operation_count == 0
+            || previous.is_some_and(|last| last >= key)
+        {
+            return Err(validation_error(
+                "invalid_chunk_order",
+                path,
+                "chunks are non-empty, contiguous, and ordered by slice, tile row, and tile column",
+            ));
+        }
+        if !strictly_ascending(&chunk.net_keys)
+            || chunk
+                .net_keys
+                .iter()
+                .any(|net| !keys.nets.contains(net.as_str()))
+        {
+            return Err(validation_error(
+                "invalid_chunk_nets",
+                format!("{path}.net_keys"),
+                "chunk net keys are known, sorted, and distinct",
+            ));
+        }
+        next += u64::from(chunk.operation_count);
+        previous = Some(key);
     }
-    Err(validation_error(
-        "invalid_chunk_member",
-        path.to_owned(),
-        "chunk members lie on the chunk slice inside the chunk bounds",
-    ))
+    Ok(next)
+}
+
+/// Tile holding the centre of `bounds`, by floor division.
+fn tile_of(bounds: &NmBounds, tile_size_nm: i64) -> (i64, i64) {
+    let centre = |low: i32, high: i32| (i64::from(low) + i64::from(high)).div_euclid(2);
+    let size = tile_size_nm.max(1);
+    (
+        centre(bounds.min_x_nm.0, bounds.max_x_nm.0).div_euclid(size),
+        centre(bounds.min_y_nm.0, bounds.max_y_nm.0).div_euclid(size),
+    )
+}
+
+/// Members of a chunk lie on its slice, inside its bounds, in its tile, and
+/// its net list is exactly their distinct nets.
+fn check_chunk_members(
+    document: &MaterializationDocumentA0,
+    chunk: &ChunkEntry,
+    position: usize,
+) -> Result<(), ValidationError> {
+    let path = format!("$.chunks[{position}]");
+    let start = usize::try_from(chunk.first_operation_index).unwrap_or(usize::MAX);
+    let end = start.saturating_add(usize::try_from(chunk.operation_count).unwrap_or(usize::MAX));
+    let members = document.operations.get(start..end).ok_or_else(|| {
+        validation_error(
+            "invalid_chunk_order",
+            path.clone(),
+            "chunk range exceeds operations",
+        )
+    })?;
+    let tile = (i64::from(chunk.tile_x), i64::from(chunk.tile_y));
+    let mut nets = BTreeSet::new();
+    for operation in members {
+        let bounds = operation_bounds(operation);
+        let inside = *chunk.bounds.min_x_nm <= *bounds.min_x_nm
+            && *chunk.bounds.min_y_nm <= *bounds.min_y_nm
+            && *chunk.bounds.max_x_nm >= *bounds.max_x_nm
+            && *chunk.bounds.max_y_nm >= *bounds.max_y_nm;
+        if operation_slice(operation) != chunk.slice_key
+            || !inside
+            || tile_of(bounds, *document.scope.tile_size_nm) != tile
+        {
+            return Err(validation_error(
+                "invalid_chunk_member",
+                path,
+                "chunk members lie on the chunk slice, inside the chunk bounds, in the chunk tile",
+            ));
+        }
+        nets.extend(operation_net(operation));
+    }
+    if !nets
+        .into_iter()
+        .eq(chunk.net_keys.iter().map(String::as_str))
+    {
+        return Err(validation_error(
+            "invalid_chunk_nets",
+            format!("{path}.net_keys"),
+            "chunk net keys are the distinct nets of its operations",
+        ));
+    }
+    Ok(())
 }

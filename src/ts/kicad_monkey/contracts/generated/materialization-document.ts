@@ -98,6 +98,13 @@ export interface MaterializationCoordinateSystem {
   x_axis: "board_right";
   y_axis: "board_down";
 }
+/**
+ * What a document holds. It is canonical: products are distinct and in
+ * `MaterialProduct` declaration order, and slice and net keys are distinct
+ * and sorted by byte value. Every operation, component, and product-tagged
+ * diagnostic lies within it: a named product, a listed slice (a hole spans
+ * one), a listed net, and bounds meeting `region`.
+ */
 export interface MaterializationScope {
   products: MaterialProduct[];
   /**
@@ -111,7 +118,7 @@ export interface MaterializationScope {
   region?: NmBounds;
   tile_size_nm: NonNegativeNm;
   /**
-   * True only when every product, slice, and net was materialized without a region.
+   * True exactly when every product is named and there is no slice, net, or region filter.
    */
   complete: boolean;
 }
@@ -204,7 +211,8 @@ export interface NmBounds1 {
   max_y_nm: Nm;
 }
 /**
- * Add or remove one shape of material on one slice. Conductive material
+ * Add or remove one shape of material on one slice whose role matches the
+ * material (copper on conductor slices, and so on). Conductive material
  * always carries `net_key`; operations on different nets are never merged.
  *
  * Operations combine without regard to order. Per slice and material
@@ -233,7 +241,7 @@ export interface SurfaceOperation {
    */
   group_key?: string;
   affine: Affine2D;
-  bounds: NmBounds;
+  bounds: NmBounds2;
 }
 export interface Disk2D {
   kind: "disk_2d";
@@ -351,7 +359,17 @@ export interface Contour {
   segments: [PathSegment, ...PathSegment[]];
 }
 /**
- * Drilled or milled hole spanning `start_slice_key` to `end_slice_key` inclusive.
+ * Axis-aligned bounds in the board frame, inclusive.
+ */
+export interface NmBounds2 {
+  min_x_nm: Nm;
+  min_y_nm: Nm;
+  max_x_nm: Nm;
+  max_y_nm: Nm;
+}
+/**
+ * Drilled or milled hole spanning the conductor slices `start_slice_key` to
+ * `end_slice_key` inclusive, in either order.
  */
 export interface HoleOperation {
   kind: "hole";
@@ -400,8 +418,11 @@ export interface BindingEntry {
 }
 /**
  * Operations of one (slice, tile) occupy a contiguous index range. An
- * operation belongs to the tile containing the centre of its bounds; the
- * chunk bounds cover every operation in it.
+ * operation belongs to the tile containing the centre of its bounds (floor
+ * division by `tile_size_nm`); the chunk bounds cover every operation in it.
+ * Chunks are non-empty, start at operation 0, follow each other without
+ * gaps, and are ordered by slice order, tile row, then tile column.
+ * `net_keys` are the distinct nets of the chunk's operations, sorted.
  */
 export interface ChunkEntry {
   slice_key: string;

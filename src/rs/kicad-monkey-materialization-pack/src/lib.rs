@@ -16,11 +16,15 @@
 //! | aligned to 8 | rest | operation columns (slice 5) |
 //!
 //! The header carries scope, stack, nets, components, binding, and the
-//! chunk directory, so a reader can seek to the chunks it needs.
+//! chunk directory, so a reader can seek to the chunks it needs. The decoder
+//! validates it with the contract's operation-independent rules before
+//! returning it.
 
 #![forbid(unsafe_code)]
 
+use kicad_monkey_contracts::ValidationError;
 use kicad_monkey_contracts::generated::materialization_document::MaterializationDocumentA0;
+use kicad_monkey_contracts::materialization_contract::validate_materialization_header;
 use std::fmt;
 
 /// File magic.
@@ -55,6 +59,8 @@ pub enum PackError {
     Truncated,
     HeaderTooLarge(usize),
     Header(serde_json::Error),
+    /// The header decodes but breaks a contract rule.
+    Invalid(ValidationError),
 }
 
 impl fmt::Display for PackError {
@@ -70,6 +76,7 @@ impl fmt::Display for PackError {
                 write!(formatter, "pack header of {bytes} bytes exceeds limit")
             }
             Self::Header(error) => write!(formatter, "pack header: {error}"),
+            Self::Invalid(error) => write!(formatter, "pack header: {error}"),
         }
     }
 }
@@ -109,7 +116,8 @@ fn read_u16(bytes: &[u8], offset: usize) -> Result<u16, PackError> {
 }
 
 /// Decode the preamble and header, checking magic, version, flags, and the
-/// header ceiling before reading the header.
+/// header ceiling before reading the header, then the header's contract
+/// rules.
 pub fn decode_header(bytes: &[u8], limits: PackLimits) -> Result<PackHeader, PackError> {
     let magic = bytes.get(..8).ok_or(PackError::Truncated)?;
     if magic != PACK_MAGIC {
@@ -141,7 +149,9 @@ pub fn decode_header(bytes: &[u8], limits: PackLimits) -> Result<PackHeader, Pac
     // Value first: the workspace's arbitrary-precision numbers do not decode
     // straight from text into the contract's untagged unions.
     let value: serde_json::Value = serde_json::from_slice(json).map_err(PackError::Header)?;
-    let document = serde_json::from_value(value).map_err(PackError::Header)?;
+    let document: MaterializationDocumentA0 =
+        serde_json::from_value(value).map_err(PackError::Header)?;
+    validate_materialization_header(&document).map_err(PackError::Invalid)?;
     Ok(PackHeader {
         document,
         columns_offset: aligned(end),

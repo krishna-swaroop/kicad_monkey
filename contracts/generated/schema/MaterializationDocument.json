@@ -195,7 +195,7 @@
                 },
                 "complete": {
                     "type": "boolean",
-                    "description": "True only when every product, slice, and net was materialized without a region."
+                    "description": "True exactly when every product is named and there is no slice, net, or region filter."
                 }
             },
             "required": [
@@ -205,7 +205,8 @@
             ],
             "unevaluatedProperties": {
                 "not": {}
-            }
+            },
+            "description": "What a document holds. It is canonical: products are distinct and in\n`MaterialProduct` declaration order, and slice and net keys are distinct\nand sorted by byte value. Every operation, component, and product-tagged\ndiagnostic lies within it: a named product, a listed slice (a hole spans\none), a listed net, and bounds meeting `region`."
         },
         "Stack": {
             "type": "object",
@@ -436,7 +437,7 @@
             "unevaluatedProperties": {
                 "not": {}
             },
-            "description": "Operations of one (slice, tile) occupy a contiguous index range. An\noperation belongs to the tile containing the centre of its bounds; the\nchunk bounds cover every operation in it."
+            "description": "Operations of one (slice, tile) occupy a contiguous index range. An\noperation belongs to the tile containing the centre of its bounds (floor\ndivision by `tile_size_nm`); the chunk bounds cover every operation in it.\nChunks are non-empty, start at operation 0, follow each other without\ngaps, and are ordered by slice order, tile row, then tile column.\n`net_keys` are the distinct nets of the chunk's operations, sorted."
         },
         "MaterializationDiagnostic": {
             "type": "object",
@@ -637,7 +638,8 @@
                     "$ref": "#/$defs/Affine2D"
                 },
                 "bounds": {
-                    "$ref": "#/$defs/NmBounds"
+                    "$ref": "#/$defs/NmBounds",
+                    "description": "Board-frame bounds holding the whole shape after `affine` and any growing offset."
                 }
             },
             "required": [
@@ -653,7 +655,7 @@
             "unevaluatedProperties": {
                 "not": {}
             },
-            "description": "Add or remove one shape of material on one slice. Conductive material\nalways carries `net_key`; operations on different nets are never merged.\n\nOperations combine without regard to order. Per slice and material\n(and per net for conductive material), operations that share a\n`group_key` form one item whose subtracts remove only that item's own\nadds; the material is then the union of the ungrouped adds and every\ngroup's result, minus the union of the ungrouped subtracts."
+            "description": "Add or remove one shape of material on one slice whose role matches the\nmaterial (copper on conductor slices, and so on). Conductive material\nalways carries `net_key`; operations on different nets are never merged.\n\nOperations combine without regard to order. Per slice and material\n(and per net for conductive material), operations that share a\n`group_key` form one item whose subtracts remove only that item's own\nadds; the material is then the union of the ungrouped adds and every\ngroup's result, minus the union of the ungrouped subtracts."
         },
         "HoleOperation": {
             "type": "object",
@@ -715,7 +717,7 @@
             "unevaluatedProperties": {
                 "not": {}
             },
-            "description": "Drilled or milled hole spanning `start_slice_key` to `end_slice_key` inclusive."
+            "description": "Drilled or milled hole spanning the conductor slices `start_slice_key` to\n`end_slice_key` inclusive, in either order."
         },
         "BindingSourceKind": {
             "type": "string",

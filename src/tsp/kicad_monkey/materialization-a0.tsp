@@ -284,7 +284,8 @@ enum SurfaceMaterial {
 }
 
 /**
- * Add or remove one shape of material on one slice. Conductive material
+ * Add or remove one shape of material on one slice whose role matches the
+ * material (copper on conductor slices, and so on). Conductive material
  * always carries `net_key`; operations on different nets are never merged.
  *
  * Operations combine without regard to order. Per slice and material
@@ -320,6 +321,8 @@ model SurfaceOperation {
   group_key?: string;
 
   affine: Affine2D;
+
+  /** Board-frame bounds holding the whole shape after `affine` and any growing offset. */
   bounds: NmBounds;
 }
 
@@ -355,7 +358,10 @@ model Backdrill {
   until_slice_key?: string;
 }
 
-/** Drilled or milled hole spanning `start_slice_key` to `end_slice_key` inclusive. */
+/**
+ * Drilled or milled hole spanning the conductor slices `start_slice_key` to
+ * `end_slice_key` inclusive, in either order.
+ */
 model HoleOperation {
   kind: "hole";
   index: uint32;
@@ -418,6 +424,13 @@ model BindingEntry {
 
 // ---------------------------------------------------------------- scope, chunks, document
 
+/**
+ * What a document holds. It is canonical: products are distinct and in
+ * `MaterialProduct` declaration order, and slice and net keys are distinct
+ * and sorted by byte value. Every operation, component, and product-tagged
+ * diagnostic lies within it: a named product, a listed slice (a hole spans
+ * one), a listed net, and bounds meeting `region`.
+ */
 model MaterializationScope {
   products: MaterialProduct[];
   /** Absent means every slice. */
@@ -426,14 +439,17 @@ model MaterializationScope {
   net_keys?: string[];
   region?: NmBounds;
   tile_size_nm: NonNegativeNm;
-  /** True only when every product, slice, and net was materialized without a region. */
+  /** True exactly when every product is named and there is no slice, net, or region filter. */
   complete: boolean;
 }
 
 /**
  * Operations of one (slice, tile) occupy a contiguous index range. An
- * operation belongs to the tile containing the centre of its bounds; the
- * chunk bounds cover every operation in it.
+ * operation belongs to the tile containing the centre of its bounds (floor
+ * division by `tile_size_nm`); the chunk bounds cover every operation in it.
+ * Chunks are non-empty, start at operation 0, follow each other without
+ * gaps, and are ordered by slice order, tile row, then tile column.
+ * `net_keys` are the distinct nets of the chunk's operations, sorted.
  */
 model ChunkEntry {
   slice_key: string;

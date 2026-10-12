@@ -315,7 +315,10 @@
       therefore decoded through
       <code>materialization_contract::decode_materialization_document_a0</code>,
       which parses to a <code>Value</code> first and then runs the semantic
-      validator. The pack header reader does the same.</li>
+      validator. The pack header reader does the same with
+      <code>validate_materialization_header</code>, which applies every rule
+      that holds without operations and takes the operation count from the
+      chunk directory.</li>
     <li><strong>Exact kinds.</strong> Every shape, segment, and operation
       checks its literal <code>kind</code> during decoding. The codegen
       injects these checks from
@@ -681,6 +684,43 @@
           <code>row_heights</code> include a negative row. Core's table
           layout draws a separator for that row and KiCad does not. Like
           text-box text, this is open in the core plotter.</li>
+      </ul></li>
+    <li><strong>Review batch 4: validator and contract.</strong> The a0
+      contract keeps its shape; only its documentation and the rules it
+      already implied are tightened.
+      <ul>
+        <li>Every <code>NonNegativeNm</code> is checked to be in
+          <code>0..=i32::MAX</code>: shape lengths (chamfers included),
+          slice and board thicknesses, plating thickness, back-drill
+          diameters, component body heights, and net-class values. The
+          generated Rust type stays an <code>i64</code>; the validator
+          enforces the range on every decode path.</li>
+        <li>Contours and swept paths need at least one segment. The Python
+          generator now carries <code>minItems</code> and
+          <code>maxItems</code> on inline arrays, so the Python bindings
+          reject empty paths too.</li>
+        <li>Each material lies on a slice of its role. Holes and back-drill
+          ends are conductor slices, and a span may run in either
+          direction.</li>
+        <li>The scope is canonical: products in declaration order, slice
+          and net keys sorted, all distinct. <code>complete</code> is true
+          exactly when every product is named without filters. Operations,
+          components, and product-tagged diagnostics lie within the scope.
+          <code>filter_document</code> now records its scope in this
+          form.</li>
+        <li>Chunks start at operation 0, are contiguous and non-empty, and
+          are strictly ordered by slice order, tile row, and tile column.
+          Each member lies in its chunk's tile, and each chunk's net list is
+          exactly its members' distinct nets.</li>
+        <li>Bounds hold their shape: every anchor point of the shape (axis
+          extremes of disks and capsules, rectangle corners or edge
+          midpoints, path vertices and arc midpoints) lies inside the bounds
+          after the affine. This is a necessary condition, not an exact
+          check. It is skipped for eroding offsets.</li>
+        <li>The pack header decoder validates the header and returns
+          <code>PackError::Invalid</code> when a rule breaks.</li>
+        <li><code>stack_regions</code> stays with slice 4, as planned
+          above.</li>
       </ul></li>
   </ul>
   <h3>Evidence</h3>

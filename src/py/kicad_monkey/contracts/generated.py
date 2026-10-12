@@ -1808,7 +1808,7 @@ class Annulus2d(Struct, forbid_unknown_fields=True, frozen=True, tag="annulus_2d
 
 class SweptPath2d(Struct, forbid_unknown_fields=True, frozen=True, tag="swept_path_2d", tag_field="kind"):
     start_nm: NmPoint
-    segments: list[PathSegment]
+    segments: Annotated[list[PathSegment], Meta(min_length=1)]
     width_nm: NonNegativeNm
     cap: PathCap
     join: PathJoin
@@ -1845,7 +1845,7 @@ PathJoin = Literal["round", "miter"]
 
 class Contour(Struct, forbid_unknown_fields=True, frozen=True):
     start_nm: NmPoint
-    segments: list[PathSegment]
+    segments: Annotated[list[PathSegment], Meta(min_length=1)]
 
 
 class LineSegment(Struct, forbid_unknown_fields=True, frozen=True, tag="line", tag_field="kind"):
@@ -2264,7 +2264,7 @@ class NativeHandshakeA0(Struct, forbid_unknown_fields=True, frozen=True):
     type_: Literal["kicad_monkey.native.handshake"] = field(name="type")
     version: Literal["a0"]
     engine_version: str
-    operations: list[Literal["design-facts"]]
+    operations: Annotated[list[Literal["design-facts"]], Meta(min_length=1, max_length=1)]
 
 
 class NativeHandshakeA1(Struct, forbid_unknown_fields=True, frozen=True):

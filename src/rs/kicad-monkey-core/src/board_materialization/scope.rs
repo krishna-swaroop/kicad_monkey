@@ -27,34 +27,37 @@ const ALL_PRODUCTS: [MaterialProduct; 7] = [
 /// Scope recorded for a request. `complete` holds only when every product is
 /// requested with no slice, net, or region filter.
 pub fn scope_from_request(request: &MaterializationRequestA0) -> MaterializationScope {
-    let mut products: Vec<MaterialProduct> = request
-        .products
-        .iter()
-        .copied()
-        .map(document_product)
-        .collect();
-    products.sort();
-    products.dedup();
-    let mut slice_keys = request.slice_keys.clone();
-    slice_keys.sort();
-    slice_keys.dedup();
-    let mut net_keys = request.net_keys.clone();
-    net_keys.sort();
-    net_keys.dedup();
-    let complete = ALL_PRODUCTS
-        .iter()
-        .all(|product| products.contains(product))
-        && slice_keys.is_empty()
-        && net_keys.is_empty()
-        && request.region.is_none();
-    MaterializationScope {
-        products,
-        slice_keys,
-        net_keys,
+    canonical_scope(MaterializationScope {
+        products: request
+            .products
+            .iter()
+            .copied()
+            .map(document_product)
+            .collect(),
+        slice_keys: request.slice_keys.clone(),
+        net_keys: request.net_keys.clone(),
         region: request.region.as_ref().map(document_bounds),
         tile_size_nm: NonNegativeNm(*request.tile_size_nm),
-        complete,
-    }
+        complete: false,
+    })
+}
+
+/// The contract's canonical form of `scope`: products in declaration order,
+/// slice and net keys sorted, all distinct, and `complete` derived.
+pub fn canonical_scope(mut scope: MaterializationScope) -> MaterializationScope {
+    scope.products.sort();
+    scope.products.dedup();
+    scope.slice_keys.sort();
+    scope.slice_keys.dedup();
+    scope.net_keys.sort();
+    scope.net_keys.dedup();
+    scope.complete = ALL_PRODUCTS
+        .iter()
+        .all(|product| scope.products.contains(product))
+        && scope.slice_keys.is_empty()
+        && scope.net_keys.is_empty()
+        && scope.region.is_none();
+    scope
 }
 
 fn document_product(product: RequestProduct) -> MaterialProduct {
@@ -136,7 +139,7 @@ fn intersects(a: &NmBounds, b: &NmBounds) -> bool {
 
 /// Apply `scope` to a complete materialization: keep matching operations,
 /// re-index and re-chunk them with the same rules the producer uses, remap
-/// the binding table, and record `scope`.
+/// the binding table, and record `scope` in canonical form.
 pub fn filter_document(
     complete: &MaterializationDocumentA0,
     scope: &MaterializationScope,
@@ -186,7 +189,7 @@ pub fn filter_document(
             .product
             .is_none_or(|product| filter.products.contains(&product))
     });
-    document.scope = scope.clone();
+    document.scope = canonical_scope(scope.clone());
     document
 }
 
