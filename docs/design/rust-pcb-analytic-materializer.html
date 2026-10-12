@@ -427,8 +427,17 @@
       implied.</li>
     <li><strong>Dielectric.</strong> Each dielectric slice adds every
       profile region, with its cutouts as holes. It then subtracts the drill
-      shape of every hole whose copper span crosses that slice. Back-drilled
-      enlargements are not yet subtracted separately.</li>
+      shape of every hole whose copper span crosses that slice.</li>
+    <li><strong>Back-drill bores in the dielectric.</strong> Each
+      back-drill or tertiary drill with a diameter and a copper end layer
+      also subtracts a disk of its diameter, centred on the hole, from every
+      dielectric slice between the drilled outer copper layer and the end
+      layer. This matches KiCad's own 3D model, which removes the bore on
+      every copper layer from the start layer to the end layer inclusive. A
+      back-drill without a diameter or without a copper end layer cannot be
+      placed. The dielectric keeps only the primary hole for it, and a
+      <code>backdrill_not_cut</code> warning names the hole. The bore is
+      not yet subtracted from copper lands on the drilled layers.</li>
     <li><strong>Hole protection.</strong> Via tenting, covering, and
       plugging (per side), filling, and capping are copied as authored, and
       <code>unspecified</code> defers to the board setup.</li>
@@ -461,7 +470,11 @@
     <li><strong>Tests.</strong> The slice tests cover the stackup mapping, an
       outline drawn from mixed-direction board and footprint edges with an
       arc and a cutout, via protection and back-drill, and rule 2 with
-      dielectric.</li>
+      dielectric. A four-layer board checks that a back-drill from
+      <code>B.Cu</code> to <code>In2.Cu</code> cuts only the bottom core,
+      that an unplaceable back-drill is reported, and that rule 2 still
+      holds. No corpus board has back-drills, so these tests are the only
+      evidence for the bore cut.</li>
   </ul>
 
   <h2>Porting from KiCad-Prism's analytic producer</h2>

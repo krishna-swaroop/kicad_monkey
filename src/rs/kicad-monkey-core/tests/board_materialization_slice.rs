@@ -693,8 +693,8 @@ fn outline_closes_across_board_and_footprint_edges_with_a_cutout() {
         .filter(|op| op["action"] == "subtract")
         .count();
     assert_eq!(
-        subtracts, 2,
-        "the via and the plated pad hole cross the core"
+        subtracts, 3,
+        "the via, its full-depth back-drill bore, and the plated pad hole cross the core"
     );
 }
 
@@ -733,6 +733,88 @@ fn dielectric_is_selectable_and_rule_two_holds() {
             serde_json::to_value(&selective).expect("serialize"),
             serde_json::to_value(&filtered).expect("serialize"),
             "rule 2 for {products:?} on {slices:?}"
+        );
+    }
+}
+
+/// Four copper layers, no stackup: a via back-drilled from the back to In2
+/// and a second back-drill with no end layer on the board.
+const BACKDRILLED: &str = r#"(kicad_pcb
+  (version 20240108)
+  (generator pcbnew)
+  (general (thickness 1.6))
+  (layers (0 "F.Cu" signal) (1 "In1.Cu" signal) (2 "In2.Cu" signal) (31 "B.Cu" signal)
+    (44 "Edge.Cuts" user))
+  (net 0 "")
+  (net 1 "SIG")
+  (gr_rect (start 0 0) (end 10 10) (stroke (width 0.1) (type solid)) (layer "Edge.Cuts"))
+  (via (at 5 5) (size 0.6) (drill 0.3) (layers "F.Cu" "B.Cu") (net 1)
+    (backdrill (size 0.5) (layers "B.Cu" "In2.Cu"))
+    (uuid via-bd))
+  (via (at 2 2) (size 0.6) (drill 0.3) (layers "F.Cu" "B.Cu") (net 1)
+    (backdrill (size 0.5) (layers "B.Cu" "User.1"))
+    (uuid via-nowhere))
+)
+"#;
+
+#[test]
+fn backdrill_bores_cut_only_the_dielectric_they_cross() {
+    let document =
+        materialize_board(BACKDRILLED, &request(&["dielectric"], "1048576")).expect("ok");
+    validate_materialization_document(&document).expect("valid");
+    let value = serde_json::to_value(&document).expect("serialize");
+    let mut cuts: Vec<(String, String, i64)> = value["operations"]
+        .as_array()
+        .expect("operations")
+        .iter()
+        .filter(|op| op["action"] == "subtract")
+        .map(|op| {
+            let uid = value["binding"]
+                .as_array()
+                .and_then(|binding| {
+                    binding
+                        .iter()
+                        .find(|entry| entry["operation_index"] == op["index"])
+                })
+                .and_then(|entry| entry["source_uid"].as_str())
+                .expect("bound");
+            (
+                op["slice_key"].as_str().expect("slice").to_owned(),
+                uid.to_owned(),
+                op["shape"]["radius_nm"].as_i64().expect("disk"),
+            )
+        })
+        .collect();
+    cuts.sort();
+    let mut expected = Vec::new();
+    for slice in ["dielectric.1", "dielectric.2", "dielectric.3"] {
+        expected.push((slice.to_owned(), "via-bd".to_owned(), 150_000));
+        expected.push((slice.to_owned(), "via-nowhere".to_owned(), 150_000));
+    }
+    expected.push(("dielectric.3".to_owned(), "via-bd".to_owned(), 250_000));
+    expected.sort();
+    assert_eq!(cuts, expected, "the bore reaches only the In2-B.Cu core");
+    let warnings: Vec<(&str, Option<&str>)> = document
+        .diagnostics
+        .iter()
+        .filter(|d| d.code == "backdrill_not_cut")
+        .map(|d| (d.code.as_str(), d.source_uid.as_deref()))
+        .collect();
+    assert_eq!(warnings, [("backdrill_not_cut", Some("via-nowhere"))]);
+}
+
+#[test]
+fn backdrill_bores_keep_rule_two() {
+    let complete = materialize_board(BACKDRILLED, &complete_request()).expect("complete");
+    for slices in [vec!["dielectric.3"], vec!["dielectric.1", "copper.back"]] {
+        let mut wanted = request(&["dielectric", "holes"], "1048576");
+        wanted.slice_keys = slices.iter().map(|key| (*key).to_owned()).collect();
+        let selective = materialize_board(BACKDRILLED, &wanted).expect("selective");
+        let filtered = filter_document(&complete, &selective.scope);
+        assert_eq!(
+            serde_json::to_value(&selective).expect("serialize"),
+            serde_json::to_value(&filtered).expect("serialize"),
+            "rule 2 on {slices:?}"
         );
     }
 }
