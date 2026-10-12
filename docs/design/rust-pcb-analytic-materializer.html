@@ -187,12 +187,15 @@
         back-drill, tertiary-drill, and post-machining records</td><td>Hole
         operations with start and end slices, back-drill, and
         <code>net_key</code>.</td></tr>
-      <tr><td>Zones</td><td>Authored outlines and stored fills. Core does no
-        refill.</td><td>Stored fills become <code>planar_region_2d</code>.
-        Callers refill with <code>kicad-cli</code> beforehand.</td></tr>
+      <tr><td>Zones</td><td>Authored outlines and stored fills, for board
+        zones and (added on this branch) zones inside footprints. Core does
+        no refill.</td><td>Stored fills become <code>planar_region_2d</code>,
+        grown as KiCad grows legacy stroked fills. Callers refill with
+        <code>kicad-cli</code> beforehand.</td></tr>
       <tr><td>Stack</td><td><code>PcbSetup</code> and
-        <code>PcbStackup</code></td><td>An ordered slice list with canonical
-        keys. Unknown values stay explicit.</td></tr>
+        <code>PcbStackup</code>, with dielectric sub-layers (added on this
+        branch)</td><td>An ordered slice list with canonical keys, one
+        slice per sub-layer. Unknown values stay explicit.</td></tr>
       <tr><td>Profile</td><td><code>profile_primitives()</code>, with no
         closure</td><td>Contour closure into an outer profile and cutouts
         (new).</td></tr>
@@ -647,6 +650,37 @@
           which differs from KiCad by up to a few millimetres (it is
           correct without a border on board text boxes). This is tracked
           for the core plotter, not the materializer.</li>
+      </ul></li>
+    <li><strong>Review batch 3.</strong> Each item was checked against
+      <code>kicad-cli</code> 10.0.6 Gerbers on a purpose-built board.
+      <ul>
+        <li>Text, text boxes, dimensions, and tables on copper layers are
+          unconnected copper (empty net). Knockout cuts stay within their
+          own item. One plot document now serves copper and the technical
+          products, so a copper-only request also plots the board.</li>
+        <li>Fills from formats before 20250210 are grown by half of
+          <code>min_thickness</code>, unless the zone says
+          <code>(filled_areas_thickness no)</code>. This holds on every
+          layer, as it does in KiCad's loader.</li>
+        <li>Dielectric sub-layers (<code>addsublayer</code>) are slices of
+          their own, in order, keyed <code>&lt;key&gt;.sub&lt;n&gt;</code>
+          from 2. Each keeps its own thickness, material, εr, and
+          tanδ.</li>
+        <li>Core now indexes zones inside footprints. KiCad neither fills
+          nor plots them (they act only as rule areas), so a stored fill
+          on one is reported as <code>footprint_zone_fill_ignored</code>
+          and adds no material.</li>
+        <li>The legacy per-via <code>(tenting front back)</code> and
+          <code>(tenting none)</code> forms are decoded. A named side is
+          tented, and <code>none</code> defers to the board.</li>
+        <li>A pad of any standard shape with chamfer flags is a chamfered
+          rectangle, as KiCad loads it. A custom pad's circular anchor
+          uses the X size.</li>
+        <li>OBC copper parity: front 0.001 %, back 0.016 %. All of the
+          back-copper difference is one table whose
+          <code>row_heights</code> include a negative row. Core's table
+          layout draws a separator for that row and KiCad does not. Like
+          text-box text, this is open in the core plotter.</li>
       </ul></li>
   </ul>
   <h3>Evidence</h3>

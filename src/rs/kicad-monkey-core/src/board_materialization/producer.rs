@@ -15,9 +15,10 @@ use super::source_graphics::copper_graphics;
 use super::stack::CopperStack;
 use super::technical::{
     FootprintTextFacts, SourceGraphics, TECHNICAL_LAYERS, TechnicalBoard, TextContext,
-    technical_graphics,
+    document_graphics, emit_copper_text, technical_graphics,
 };
 use super::{MaterializationError, error};
+use crate::board_plotter_ir::BoardPlotDocument;
 use crate::pcb::{
     PcbFamily, PcbFootprint, PcbFootprintGraphic, PcbGraphic, PcbGraphicKind, PcbPad,
     PcbRoutingArc, PcbSegment, PcbSelection, PcbSetup, PcbVia, PcbView, PcbZone,
@@ -79,10 +80,32 @@ struct Sources {
 }
 
 /// Copper zones, and zones on technical layers. Other zones never
-/// contribute material. A zone that fails to decode is reported, never
+/// contribute material. KiCad neither fills nor plots zones owned by a
+/// footprint (they act only as rule areas), so a stored fill on one is
+/// reported and left out. A zone that fails to decode is reported, never
 /// silently dropped.
 fn split_zones(view: &PcbView<'_>, emitter: &mut Emitter) -> (Vec<PcbZone>, Vec<PcbZone>) {
     let (mut copper, mut technical) = (Vec::new(), Vec::new());
+    // Zones may be on any layer, so their warnings belong to no product.
+    let product = emitter.product.take();
+    for owned in view.footprint_zones() {
+        match owned {
+            Ok(owned) if !owned.zone.filled_polygons.is_empty() => {
+                let zone = &owned.zone;
+                emitter.warn(
+                    "footprint_zone_fill_ignored",
+                    "KiCad does not plot fills of zones inside footprints".to_owned(),
+                    Some(source_uid(
+                        "zone",
+                        zone.uuid.as_deref(),
+                        zone.source_range.start,
+                    )),
+                );
+            }
+            Ok(_) => {}
+            Err(cause) => emitter.warn("zone_not_decoded", cause.to_string(), None),
+        }
+    }
     for zone in view.zones() {
         match zone {
             Ok(zone) if zone.layers.iter().any(|layer| layer.ends_with(".Cu")) => copper.push(zone),
@@ -95,15 +118,10 @@ fn split_zones(view: &PcbView<'_>, emitter: &mut Emitter) -> (Vec<PcbZone>, Vec<
                 technical.push(zone);
             }
             Ok(_) => {}
-            Err(cause) => {
-                // Unknown zones may be on any layer, so the warning belongs
-                // to no single product.
-                let product = emitter.product.take();
-                emitter.warn("zone_not_decoded", cause.to_string(), None);
-                emitter.product = product;
-            }
+            Err(cause) => emitter.warn("zone_not_decoded", cause.to_string(), None),
         }
     }
+    emitter.product = product;
     (copper, technical)
 }
 
@@ -196,13 +214,18 @@ pub(crate) fn emit_board(
     let setup = view.setup().map_err(parse_error)?;
     let stack = stack_of(&view, setup.as_ref(), &copper, &mut emitter)?;
     let wants = |product: MaterialProduct| products.contains(&product);
-    let graphics = if wants(MaterialProduct::Copper)
-        || TECHNICAL_PRODUCTS.iter().any(|product| wants(*product))
-    {
+    let drawn =
+        wants(MaterialProduct::Copper) || TECHNICAL_PRODUCTS.iter().any(|product| wants(*product));
+    let graphics = if drawn {
         source_graphics(&view)?
     } else {
         (Vec::new(), Vec::new())
     };
+    // Text of every drawn product comes from one plot document.
+    let text = drawn.then(|| Text {
+        context: text_context(source, &view, &graphics.0),
+        document: presentation_plot(source, &view),
+    });
     if wants(MaterialProduct::Copper) {
         emit_copper(source, &view, &sources, &copper, &mut emitter)?;
         let names = NetNames::new(&collect(view.nets())?, &nets);
@@ -214,27 +237,19 @@ pub(crate) fn emit_board(
             &names,
             &mut emitter,
         );
+        if let Some(text) = &text {
+            text.emit_copper(&copper, &mut emitter);
+        }
     }
     let regions = profile_regions(&view, &sources, products, &mut emitter)?;
-    if wants(MaterialProduct::Holes) || wants(MaterialProduct::Dielectric) {
-        let holes = hole_specs(&sources, &copper, &mut emitter);
-        if wants(MaterialProduct::Holes) {
-            emitter.product = Some(MaterialProduct::Holes);
-            holes.iter().for_each(|hole| emitter.hole(hole));
-        }
-        if wants(MaterialProduct::Dielectric) {
-            emitter.product = Some(MaterialProduct::Dielectric);
-            dielectric_regions(&regions, &holes, &stack, &mut emitter);
-        }
-    }
+    emit_drilled(&sources, &copper, &regions, &stack, products, &mut emitter);
     let board = Board {
-        source,
-        view: &view,
         sources: &sources,
         setup: setup.as_ref(),
         stack: &stack,
         regions: &regions,
         graphics: &graphics,
+        text: text.as_ref(),
     };
     emit_technical(&board, products, &mut emitter);
     let components = if wants(MaterialProduct::Components) {
@@ -248,6 +263,33 @@ pub(crate) fn emit_board(
         components,
         emitter,
     })
+}
+
+/// Holes, and the dielectric they are cut from.
+fn emit_drilled(
+    sources: &Sources,
+    copper: &CopperStack,
+    regions: &[PlanarRegion2d],
+    stack: &Stack,
+    products: &[MaterialProduct],
+    emitter: &mut Emitter,
+) {
+    let (holes_wanted, dielectric_wanted) = (
+        products.contains(&MaterialProduct::Holes),
+        products.contains(&MaterialProduct::Dielectric),
+    );
+    if !holes_wanted && !dielectric_wanted {
+        return;
+    }
+    let holes = hole_specs(sources, copper, emitter);
+    if holes_wanted {
+        emitter.product = Some(MaterialProduct::Holes);
+        holes.iter().for_each(|hole| emitter.hole(hole));
+    }
+    if dielectric_wanted {
+        emitter.product = Some(MaterialProduct::Dielectric);
+        dielectric_regions(regions, &holes, stack, emitter);
+    }
 }
 
 fn emit_copper(
@@ -273,9 +315,10 @@ fn emit_copper(
             None,
         );
     }
+    let version = view.metadata().map_or(0, |metadata| metadata.version);
     route_copper(&routes(&sources.segments, &sources.arcs), copper, emitter);
     via_lands(&sources.vias, copper, &flash, emitter);
-    zone_fills(&sources.zones, copper, emitter);
+    zone_fills(&sources.zones, copper, version, emitter);
     let pads = Pads {
         copper,
         flash: &flash,
@@ -349,13 +392,35 @@ fn profile_regions(
 
 /// Parsed board state shared by the technical products.
 struct Board<'a> {
-    source: &'a str,
-    view: &'a PcbView<'a>,
     sources: &'a Sources,
     setup: Option<&'a PcbSetup>,
     stack: &'a Stack,
     regions: &'a [PlanarRegion2d],
     graphics: &'a (Vec<PcbGraphic>, Vec<PcbFootprintGraphic>),
+    /// Present whenever a drawn product is requested.
+    text: Option<&'a Text>,
+}
+
+/// Text facts and the plot document that places board and footprint text.
+struct Text {
+    context: TextContext,
+    /// `None` when the board cannot be plotted.
+    document: Option<BoardPlotDocument>,
+}
+
+impl Text {
+    fn emit_copper(&self, copper: &CopperStack, emitter: &mut Emitter) {
+        if self.document.is_none() {
+            emitter.warn(
+                "text_not_plotted",
+                "board text could not be plotted; copper text is not materialized".to_owned(),
+                None,
+            );
+        }
+        let on_copper = |layer: &str| copper.key(layer).is_some();
+        let placed = document_graphics(self.document.as_ref(), &self.context, &on_copper);
+        emit_copper_text(&placed, copper, emitter);
+    }
 }
 
 const TECHNICAL_PRODUCTS: [MaterialProduct; 3] = [
@@ -433,11 +498,9 @@ fn emit_technical(board: &Board<'_>, products: &[MaterialProduct], emitter: &mut
         .into_iter()
         .filter(|product| products.contains(product))
         .collect();
-    if wanted.is_empty() {
+    let Some(Text { context, document }) = board.text.filter(|_| !wanted.is_empty()) else {
         return;
-    }
-    let context = text_context(board.source, board.view, &board.graphics.0);
-    let document = presentation_plot(board.source, board.view);
+    };
     let margins = BoardMargins::from_setup(board.setup, context.version);
     let graphics = SourceGraphics {
         board: &board.graphics.0,
@@ -446,7 +509,7 @@ fn emit_technical(board: &Board<'_>, products: &[MaterialProduct], emitter: &mut
         zones: &board.sources.technical_zones,
         mask_margin_nm: margins.mask_nm,
     };
-    let placed = technical_graphics(&graphics, document.as_ref(), &context);
+    let placed = technical_graphics(&graphics, document.as_ref(), context);
     let technical = TechnicalBoard {
         stack: board.stack,
         regions: board.regions,

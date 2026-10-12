@@ -8,6 +8,9 @@
 //! - Silkscreen: per side, silkscreen graphics, text, and zones as
 //!   authored. Clipping silkscreen by mask openings is a fabrication step
 //!   and is left to consumers.
+//!
+//! Copper-layer text from the same plot-document walk is emitted here too,
+//! as unconnected copper.
 
 use super::apertures::{
     BoardMargins, aperture, mask_margin, on_layer, paste_margin, via_opening_nm,
@@ -20,8 +23,9 @@ use super::nets::net_key;
 use super::pads::reference;
 use super::pads::{pad_shapes, place_pad};
 use super::routing::Route;
-use super::routing::polyline_contour;
+use super::routing::{fill_offset_nm, polyline_contour};
 use super::source_graphics::{graphic_layers, graphic_shapes};
+use super::stack::CopperStack;
 use crate::board_plotter_ir::{
     BoardDimensionOperation, BoardFootprintOperation, BoardFootprintRecord, BoardPlotDocument,
     BoardPlotRecord, BoardTableOperation, BoardTextBoxOperation, BoardTextOperation,
@@ -72,13 +76,17 @@ fn sides(product: MaterialProduct) -> [Side; 2] {
     ]
 }
 
+fn surface_of(product: MaterialProduct) -> SurfaceMaterial {
+    match product {
+        MaterialProduct::SolderMask => SurfaceMaterial::SolderMask,
+        MaterialProduct::Paste => SurfaceMaterial::Paste,
+        _ => SurfaceMaterial::Silkscreen,
+    }
+}
+
 fn material(product: MaterialProduct, action: MaterialAction) -> Material {
     Material {
-        material: match product {
-            MaterialProduct::SolderMask => SurfaceMaterial::SolderMask,
-            MaterialProduct::Paste => SurfaceMaterial::Paste,
-            _ => SurfaceMaterial::Silkscreen,
-        },
+        material: surface_of(product),
         action,
         net_key: None,
         group_key: None,
@@ -207,9 +215,13 @@ fn board_anchor(operation: &BoardTextOperation, record: &BoardFootprintRecord) -
     )
 }
 
+/// Layers a plot-document walk keeps.
+pub(crate) type LayerFilter<'a> = &'a dyn Fn(&str) -> bool;
+
 fn footprint_graphics(
     record: &BoardFootprintRecord,
     context: &TextContext,
+    keep: LayerFilter<'_>,
     out: &mut Vec<PlacedGraphic>,
 ) {
     let placement = rotation_translation(
@@ -235,7 +247,7 @@ fn footprint_graphics(
             .extra_attrs
             .layer_name
             .as_deref()
-            .filter(|layer| technical(layer))
+            .filter(|layer| keep(layer))
         else {
             continue;
         };
@@ -303,9 +315,12 @@ fn mixed(
 
 /// The technical layer, UID prefix, and parts of a text box, dimension, or
 /// table record.
-fn mixed_parts(record: &BoardPlotRecord) -> Option<(&str, &str, &str, Vec<Part<'_>>)> {
+fn mixed_parts<'a>(
+    record: &'a BoardPlotRecord,
+    keep: LayerFilter<'_>,
+) -> Option<(&'a str, &'a str, &'a str, Vec<Part<'a>>)> {
     match record {
-        BoardPlotRecord::TextBox(value) if technical(&value.layer) => {
+        BoardPlotRecord::TextBox(value) if keep(&value.layer) => {
             let parts = value.operations.iter().map(|op| match op {
                 BoardTextBoxOperation::Border(op) => Part::Geometry(op),
                 BoardTextBoxOperation::Text(op) => Part::Text(op),
@@ -318,7 +333,7 @@ fn mixed_parts(record: &BoardPlotRecord) -> Option<(&str, &str, &str, Vec<Part<'
             ))
         }
         BoardPlotRecord::Dimension(value) => {
-            let layer = value.layers.iter().find(|layer| technical(layer))?;
+            let layer = value.layers.iter().find(|layer| keep(layer))?;
             let parts = value.operations.iter().map(|op| match op {
                 BoardDimensionOperation::Geometry(op) => Part::Geometry(op),
                 BoardDimensionOperation::Text(op) => Part::Text(op),
@@ -331,7 +346,7 @@ fn mixed_parts(record: &BoardPlotRecord) -> Option<(&str, &str, &str, Vec<Part<'
             ))
         }
         BoardPlotRecord::Table(value) => {
-            let layer = value.layers.iter().find(|layer| technical(layer))?;
+            let layer = value.layers.iter().find(|layer| keep(layer))?;
             let parts = value.operations.iter().map(|op| match op {
                 BoardTableOperation::Segment(op) => Part::Geometry(op),
                 BoardTableOperation::Text(op) => Part::Text(op),
@@ -351,10 +366,11 @@ fn board_graphics(
     record: &BoardPlotRecord,
     position: usize,
     context: &TextContext,
+    keep: LayerFilter<'_>,
     out: &mut Vec<PlacedGraphic>,
 ) {
     match record {
-        BoardPlotRecord::Text(value) if technical(&value.layer) => {
+        BoardPlotRecord::Text(value) if keep(&value.layer) => {
             let uid = record_uid("text", &value.uuid, position);
             let origin = unbound(BindingSourceKind::BoardText, uid);
             let knockout = context.board_knockout.contains(&value.uuid);
@@ -367,9 +383,9 @@ fn board_graphics(
                 }
             });
         }
-        BoardPlotRecord::Footprint(value) => footprint_graphics(value, context, out),
+        BoardPlotRecord::Footprint(value) => footprint_graphics(value, context, keep, out),
         _ => {
-            if let Some((layer, kind, uuid, parts)) = mixed_parts(record) {
+            if let Some((layer, kind, uuid, parts)) = mixed_parts(record, keep) {
                 let source = if kind == "text_box" {
                     BindingSourceKind::BoardText
                 } else {
@@ -382,10 +398,11 @@ fn board_graphics(
     }
 }
 
-/// Stored fills of zones on technical layers.
-fn zone_graphics(zones: &[PcbZone], out: &mut Vec<PlacedGraphic>) {
+/// Stored fills of zones on technical layers, grown as legacy fills are.
+fn zone_graphics(zones: &[PcbZone], version: i64, out: &mut Vec<PlacedGraphic>) {
     for zone in zones {
         let uid = source_uid("zone", zone.uuid.as_deref(), zone.source_range.start);
+        let offset_nm = fill_offset_nm(zone, version);
         for polygon in &zone.filled_polygons {
             let layer = match (polygon.layer.is_empty(), zone.layers.as_slice()) {
                 (true, [only]) => only.as_str(),
@@ -409,6 +426,9 @@ fn zone_graphics(zones: &[PcbZone], out: &mut Vec<PlacedGraphic>) {
                     }));
                 }
             });
+            if let Some(last) = out.last_mut() {
+                last.offset_nm = offset_nm;
+            }
         }
     }
 }
@@ -515,13 +535,25 @@ pub(crate) fn technical_graphics(
 ) -> Vec<PlacedGraphic> {
     let mut out = Vec::new();
     source_graphics(graphics, &mut out);
+    out.extend(document_graphics(document, context, &technical));
+    zone_graphics(graphics.zones, context.version, &mut out);
+    out
+}
+
+/// Text, text boxes, dimensions, and tables of the plot document on the
+/// layers `keep` accepts. Other geometry comes from the parsed source.
+pub(crate) fn document_graphics(
+    document: Option<&BoardPlotDocument>,
+    context: &TextContext,
+    keep: LayerFilter<'_>,
+) -> Vec<PlacedGraphic> {
+    let mut out = Vec::new();
     for (position, record) in document
         .into_iter()
         .flat_map(|doc| doc.records.iter().enumerate())
     {
-        board_graphics(record, position, context, &mut out);
+        board_graphics(record, position, context, keep, &mut out);
     }
-    zone_graphics(graphics.zones, &mut out);
     out
 }
 
@@ -531,7 +563,7 @@ pub(crate) fn technical_graphics(
 /// instead.
 fn emit_graphic(
     graphic: &PlacedGraphic,
-    product: MaterialProduct,
+    surface: SurfaceMaterial,
     action: MaterialAction,
     slice: &str,
     emitter: &mut Emitter,
@@ -572,8 +604,15 @@ fn emit_graphic(
     let group_key = has_cuts.then(|| graphic.origin.uid.clone());
     for (action, shapes) in passes {
         for (shape, affine) in shapes {
-            let mut material = material(product, action);
-            material.group_key.clone_from(&group_key);
+            let material = Material {
+                material: surface,
+                action,
+                // Copper text is unconnected copper; other materials have
+                // no net.
+                net_key: (surface == SurfaceMaterial::Copper)
+                    .then(|| graphic.origin.net_key.clone()),
+                group_key: group_key.clone(),
+            };
             emitter.offset_surface(
                 &graphic.origin,
                 slice,
@@ -654,7 +693,7 @@ impl TechnicalBoard<'_> {
         };
         for graphic in self.graphics {
             if graphic.layer == side.layer {
-                emit_graphic(graphic, product, action, side.slice, emitter);
+                emit_graphic(graphic, surface_of(product), action, side.slice, emitter);
             }
         }
     }
@@ -786,6 +825,26 @@ impl TechnicalBoard<'_> {
                     radius_nm: NonNegativeNm(diameter / 2),
                 }),
                 rotation_translation(0.0, via.at_x, via.at_y),
+            );
+        }
+    }
+}
+
+/// Copper-layer text, text boxes, dimensions, and tables, as unconnected
+/// copper; knockout cuts stay within their own item.
+pub(crate) fn emit_copper_text(
+    graphics: &[PlacedGraphic],
+    copper: &CopperStack,
+    emitter: &mut Emitter,
+) {
+    for graphic in graphics {
+        if let Some(slice) = copper.key(&graphic.layer) {
+            emit_graphic(
+                graphic,
+                SurfaceMaterial::Copper,
+                MaterialAction::Add,
+                slice,
+                emitter,
             );
         }
     }

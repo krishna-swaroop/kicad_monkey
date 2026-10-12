@@ -56,7 +56,21 @@ pub struct PcbStackupLayer {
     pub epsilon_r: Option<f64>,
     pub loss_tangent: Option<f64>,
     pub color: String,
+    /// Dielectric sub-layers after the first (`addsublayer`), in order. The
+    /// first sub-layer is described by the fields above.
+    pub sublayers: Vec<PcbStackupSublayer>,
     pub source_range: Range<usize>,
+}
+
+/// One further dielectric sub-layer of a stackup layer.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PcbStackupSublayer {
+    pub thickness: f64,
+    pub thickness_locked: bool,
+    pub material: String,
+    pub epsilon_r: Option<f64>,
+    pub loss_tangent: Option<f64>,
+    pub color: String,
 }
 
 impl<'a> PcbView<'a> {
@@ -186,25 +200,61 @@ fn stackup_layer_from_span(
     limits: PcbLimits,
 ) -> Result<PcbStackupLayer, Error> {
     let name = first_string(source, span)?.unwrap_or_default();
-    let children = direct_children(source, span, 32, limits)?;
-    let thickness = child(&children, "thickness");
+    let children = direct_children(source, span, 32 * MAX_SUBLAYERS, limits)?;
+    // KiCad starts a new sub-layer at each bare `addsublayer` token.
+    let breaks: Vec<usize> = bounded_scalar_values(source, span, MAX_SUBLAYERS + 8)?
+        .iter()
+        .filter(|token| token.lexeme == "addsublayer")
+        .map(|token| span.range.start + token.position.offset)
+        .collect();
+    let mut parts = (0..=breaks.len())
+        .map(|part| {
+            let group: Vec<FormSpan> = children
+                .iter()
+                .filter(|child| breaks.partition_point(|at| *at < child.range.start) == part)
+                .cloned()
+                .collect();
+            sublayer_from_children(source, span, &group)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let first = parts.remove(0);
+    Ok(PcbStackupLayer {
+        name,
+        type_name: optional_child_string(source, &children, "type")?.unwrap_or_default(),
+        thickness: first.thickness,
+        thickness_locked: first.thickness_locked,
+        material: first.material,
+        epsilon_r: first.epsilon_r,
+        loss_tangent: first.loss_tangent,
+        color: first.color,
+        sublayers: parts,
+        source_range: span.range.clone(),
+    })
+}
+
+/// Most sub-layers one stackup layer may declare.
+const MAX_SUBLAYERS: usize = 64;
+
+fn sublayer_from_children(
+    source: &str,
+    span: &FormSpan,
+    children: &[FormSpan],
+) -> Result<PcbStackupSublayer, Error> {
+    let thickness = child(children, "thickness");
     let thickness_flags = thickness
         .map(|value| bounded_scalar_values(source, value, 8))
         .transpose()?
         .unwrap_or_default();
-    Ok(PcbStackupLayer {
-        name,
-        type_name: optional_child_string(source, &children, "type")?.unwrap_or_default(),
+    Ok(PcbStackupSublayer {
         thickness: thickness_flags
             .first()
             .map(|token| parse_f64(token, span))
             .transpose()?
             .unwrap_or(0.0),
         thickness_locked: has_flag(&thickness_flags, "locked"),
-        material: optional_child_string(source, &children, "material")?.unwrap_or_default(),
-        epsilon_r: optional_child_f64(source, &children, "epsilon_r")?,
-        loss_tangent: optional_child_f64(source, &children, "loss_tangent")?,
-        color: optional_child_string(source, &children, "color")?.unwrap_or_default(),
-        source_range: span.range.clone(),
+        material: optional_child_string(source, children, "material")?.unwrap_or_default(),
+        epsilon_r: optional_child_f64(source, children, "epsilon_r")?,
+        loss_tangent: optional_child_f64(source, children, "loss_tangent")?,
+        color: optional_child_string(source, children, "color")?.unwrap_or_default(),
     })
 }

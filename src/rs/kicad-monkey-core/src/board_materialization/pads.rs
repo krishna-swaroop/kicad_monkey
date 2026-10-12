@@ -69,7 +69,21 @@ impl PadFrame {
 /// Whether an unplated pad has no copper on this layer (`PAD::FlashLayer`):
 /// a circle on a round drill, or an oval on an oblong drill, centred on the
 /// hole and no larger than it. Every other NPTH pad keeps its copper.
+/// The pad shape as KiCad loads it: a pad of any standard shape with
+/// chamfered corners becomes a chamfered rectangle (`parsePAD`), which is
+/// a chamfered round rectangle here.
+pub(crate) fn as_loaded<'a>(
+    resolved: &PcbResolvedPadCopperLayer<'a>,
+) -> PcbResolvedPadCopperLayer<'a> {
+    let mut loaded = *resolved;
+    if loaded.shape != "custom" && !loaded.chamfer_corners.is_empty() {
+        loaded.shape = "roundrect";
+    }
+    loaded
+}
+
 pub(crate) fn npth_without_copper(pad: &PcbPad, resolved: &PcbResolvedPadCopperLayer<'_>) -> bool {
+    let resolved = &as_loaded(resolved);
     let Some(drill) = pad.drill.as_ref().filter(|_| pad.kind == "np_thru_hole") else {
         return false;
     };
@@ -151,6 +165,7 @@ pub(crate) fn pad_shapes(
     slice: &str,
     emitter: &mut Emitter,
 ) -> PadShapes {
+    let resolved = &as_loaded(resolved);
     if resolved.shape == "custom" {
         return custom_shapes(resolved, origin, emitter);
     }
@@ -289,7 +304,8 @@ fn custom_shapes(
                 height_nm: len(height),
             })
         } else {
-            disk(width.min(height) / 2.0)
+            // KiCad sizes a circular anchor by its X size.
+            disk(width / 2.0)
         }
     });
     let mut primitives = Vec::new();

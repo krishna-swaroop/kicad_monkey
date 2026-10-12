@@ -87,6 +87,9 @@ pub struct PcbZone {
     pub connect_pads_clearance: f64,
     pub min_thickness: f64,
     pub filled_areas_thickness: bool,
+    /// Whether `(filled_areas_thickness ...)` is declared. Before format
+    /// 20250210, fills without it were stroked at `min_thickness`.
+    pub has_filled_areas_thickness: bool,
     pub fill_enabled: bool,
     pub thermal_gap: f64,
     pub thermal_bridge_width: f64,
@@ -186,6 +189,7 @@ pub(super) fn zone_from_span(
         min_thickness: optional_child_f64(source, &children, "min_thickness")?.unwrap_or(0.25),
         filled_areas_thickness: optional_child_string(source, &children, "filled_areas_thickness")?
             .is_some_and(|value| value == "yes"),
+        has_filled_areas_thickness: child(&children, "filled_areas_thickness").is_some(),
         fill_enabled,
         thermal_gap: optional_child_f64(source, &fill_children, "thermal_gap")?.unwrap_or(0.5),
         thermal_bridge_width: optional_child_f64(source, &fill_children, "thermal_bridge_width")?

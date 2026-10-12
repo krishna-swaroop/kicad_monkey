@@ -10,6 +10,7 @@
 //! not evaluated.
 
 use super::geometry::nm;
+use super::pads::as_loaded;
 use crate::pcb::{PcbFootprint, PcbPad, PcbResolvedPadCopperLayer, PcbSetup, PcbVia};
 
 /// Board-level defaults from `(setup ...)`.
@@ -167,6 +168,7 @@ pub(crate) fn aperture<'a>(
     resolved: &PcbResolvedPadCopperLayer<'a>,
     margin: (i64, i64),
 ) -> Option<Aperture<'a>> {
+    let resolved = &as_loaded(resolved);
     let margin = (
         margin.0.clamp(-NM_LIMIT, NM_LIMIT),
         margin.1.clamp(-NM_LIMIT, NM_LIMIT),

@@ -44,6 +44,7 @@ pub use extended::{
 };
 pub use footprints::{
     PcbFootprintGraphic, PcbFootprintProperty, PcbFootprintText, PcbFootprintTextBox,
+    PcbFootprintZone,
 };
 pub use manufacturing::{
     PcbDrillLayerSpan, PcbDrillProperties, PcbPostMachiningProperties, PcbTeardropParameters,
@@ -61,7 +62,7 @@ pub use physical::{
     PcbProfilePrimitive,
 };
 pub use selection::{PcbFamily, PcbSelection};
-pub use setup::{PcbSetup, PcbStackup, PcbStackupLayer};
+pub use setup::{PcbSetup, PcbStackup, PcbStackupLayer, PcbStackupSublayer};
 pub use vias::{PcbFrontBackOptionalBool, PcbVia};
 pub use zones::{
     PcbZone, PcbZoneFilledPolygon, PcbZoneKeepout, PcbZoneLayerProperty, PcbZonePlacement,
@@ -711,6 +712,7 @@ struct PcbIndex {
     footprint_graphics: Vec<IndexedNestedForm>,
     footprint_texts: Vec<IndexedNestedForm>,
     footprint_text_boxes: Vec<IndexedNestedForm>,
+    footprint_zones: Vec<IndexedNestedForm>,
     segments: Vec<FormSpan>,
     vias: Vec<FormSpan>,
     zones: Vec<FormSpan>,
@@ -744,6 +746,7 @@ pub struct PcbView<'a> {
     footprint_graphics: Vec<IndexedNestedForm>,
     footprint_texts: Vec<IndexedNestedForm>,
     footprint_text_boxes: Vec<IndexedNestedForm>,
+    footprint_zones: Vec<IndexedNestedForm>,
     segments: Vec<FormSpan>,
     vias: Vec<FormSpan>,
     zones: Vec<FormSpan>,
@@ -824,6 +827,7 @@ impl<'a> PcbView<'a> {
             footprint_graphics: index.footprint_graphics,
             footprint_texts: index.footprint_texts,
             footprint_text_boxes: index.footprint_text_boxes,
+            footprint_zones: index.footprint_zones,
             segments: index.segments,
             vias: index.vias,
             zones: index.zones,

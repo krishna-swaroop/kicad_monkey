@@ -2,7 +2,8 @@
 //!
 //! Roles come from the stackup layer type. Thickness, material, εr, and
 //! tanδ are copied only when KiCad states them; anything else stays absent
-//! (unknown). A board without a stackup gets an explicit stack of the same
+//! (unknown). A dielectric with sub-layers becomes one slice per
+//! sub-layer, in order. A board without a stackup gets an explicit stack of the same
 //! shape with every physical value unknown, and a diagnostic.
 
 use super::geometry::nm;
@@ -70,21 +71,40 @@ fn known(text: &str) -> Option<String> {
         .then(|| trimmed.to_owned())
 }
 
-fn slice_from(layer: &PcbStackupLayer, order: usize) -> StackSlice {
+/// The slice of `layer`, then one dielectric slice per further sub-layer
+/// (`addsublayer`), keyed `<key>.sub<n>` from 2.
+fn slices_from(layer: &PcbStackupLayer) -> Vec<StackSlice> {
     let role = role_of(layer);
     let side = side_of(&layer.type_name);
-    StackSlice {
-        key: technical_key(role, side, &layer.name),
+    let key = technical_key(role, side, &layer.name);
+    let slice = |key: String, thickness: f64, material: &str, er, tan| StackSlice {
+        key,
         role,
-        order: u32::try_from(order).unwrap_or(u32::MAX),
+        order: 0,
         kicad_layer: Some(layer.name.clone()),
         side,
-        thickness_nm: (layer.thickness > 0.0)
-            .then(|| NonNegativeNm(i64::from(nm(layer.thickness)))),
-        material_name: known(&layer.material),
-        relative_permittivity: layer.epsilon_r,
-        loss_tangent: layer.loss_tangent,
+        thickness_nm: (thickness > 0.0).then(|| NonNegativeNm(i64::from(nm(thickness)))),
+        material_name: known(material),
+        relative_permittivity: er,
+        loss_tangent: tan,
+    };
+    let mut slices = vec![slice(
+        key.clone(),
+        layer.thickness,
+        &layer.material,
+        layer.epsilon_r,
+        layer.loss_tangent,
+    )];
+    for (position, sub) in layer.sublayers.iter().enumerate() {
+        slices.push(slice(
+            format!("{key}.sub{}", position + 2),
+            sub.thickness,
+            &sub.material,
+            sub.epsilon_r,
+            sub.loss_tangent,
+        ));
     }
+    slices
 }
 
 fn technical(role: SliceRole, side: BoardSide, name: &str) -> StackSlice {
@@ -155,8 +175,7 @@ pub(crate) fn board_stack(
         value
             .layers
             .iter()
-            .enumerate()
-            .map(|(order, layer)| slice_from(layer, order))
+            .flat_map(slices_from)
             .collect::<Vec<_>>()
     });
     let stackup_copper: Option<Vec<String>> = from_stackup.as_ref().map(|slices| {

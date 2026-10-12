@@ -1,14 +1,15 @@
 //! Routed copper: tracks, track arcs, via lands, and stored zone fills.
 
-use super::emit::{Emitter, Origin, source_uid};
+use super::emit::{Emitter, Material, Origin, source_uid};
 use super::flash::FlashLayers;
 use super::geometry::{circumcircle, identity, nm, nm_point, origin, pcb_point};
 use super::nets::net_key;
 use super::stack::CopperStack;
 use crate::pcb::{PcbRoutingArc, PcbSegment, PcbVia, PcbZone};
 use kicad_monkey_contracts::generated::materialization_document::{
-    ArcSegment, BindingSourceKind, Contour, Disk2d, LineSegment, NmPoint, NonNegativeNm, PathCap,
-    PathJoin, PathSegment, PlanarRegion2d, Shape2d, SweptPath2d,
+    ArcSegment, BindingSourceKind, Contour, Disk2d, LineSegment, MaterialAction, NmPoint,
+    NonNegativeNm, PathCap, PathJoin, PathSegment, PlanarRegion2d, Shape2d, SurfaceMaterial,
+    SweptPath2d,
 };
 
 fn swept(start: NmPoint, segment: PathSegment, width_mm: f64) -> Shape2d {
@@ -207,9 +208,33 @@ pub(crate) fn via_lands(
     }
 }
 
-/// Stored zone fills, one planar region per filled polygon.
-pub(crate) fn zone_fills(zones: &[PcbZone], stack: &CopperStack, emitter: &mut Emitter) {
+/// First format whose stored zone fills are final. Older fills were
+/// stroked at `min_thickness` unless `(filled_areas_thickness no)` says
+/// otherwise, and KiCad grows them by half of it when loading.
+const FIRST_UNSTROKED_FILLS: i64 = 20_250_210;
+
+/// Round offset KiCad applies to the stored fills of `zone`.
+pub(crate) fn fill_offset_nm(zone: &PcbZone, version: i64) -> i32 {
+    let stroked = version < FIRST_UNSTROKED_FILLS
+        && zone.keepout.is_none()
+        && (!zone.has_filled_areas_thickness || zone.filled_areas_thickness);
+    if stroked {
+        nm(zone.min_thickness).max(0) / 2
+    } else {
+        0
+    }
+}
+
+/// Stored zone fills, one planar region per filled polygon, grown as
+/// [`fill_offset_nm`] says.
+pub(crate) fn zone_fills(
+    zones: &[PcbZone],
+    stack: &CopperStack,
+    version: i64,
+    emitter: &mut Emitter,
+) {
     for zone in zones {
+        let offset_nm = fill_offset_nm(zone, version);
         let uid = source_uid("zone", zone.uuid.as_deref(), zone.source_range.start);
         let origin = Origin::routed(BindingSourceKind::ZoneFill, uid, net_key(&zone.net));
         for polygon in &zone.filled_polygons {
@@ -236,7 +261,13 @@ pub(crate) fn zone_fills(zones: &[PcbZone], stack: &CopperStack, emitter: &mut E
                 outer: contour,
                 holes: Vec::new(),
             });
-            emitter.copper(&origin, slice, shape, identity());
+            let material = Material {
+                material: SurfaceMaterial::Copper,
+                action: MaterialAction::Add,
+                net_key: Some(origin.net_key.clone()),
+                group_key: None,
+            };
+            emitter.offset_surface(&origin, slice, material, shape, identity(), offset_nm);
         }
     }
 }
