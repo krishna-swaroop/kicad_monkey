@@ -2934,13 +2934,17 @@ impl ::std::convert::TryFrom<::std::string::String> for SurfaceMaterial {
     }
 }
 /**Add or remove one shape of material on one slice. Conductive material
-always carries `net_key`; operations on different nets are never merged.*/
+always carries `net_key`; operations on different nets are never merged.
+
+Operations combine without regard to order: the material on a slice is
+the union of its `add` shapes minus the union of its `subtract` shapes,
+taken per material and, for conductive material, per net.*/
 ///
 /// <details><summary>JSON schema</summary>
 ///
 /// ```json
 ///{
-///  "description": "Add or remove one shape of material on one slice. Conductive material\nalways carries `net_key`; operations on different nets are never merged.",
+///  "description": "Add or remove one shape of material on one slice. Conductive material\nalways carries `net_key`; operations on different nets are never merged.\n\nOperations combine without regard to order: the material on a slice is\nthe union of its `add` shapes minus the union of its `subtract` shapes,\ntaken per material and, for conductive material, per net.",
 ///  "type": "object",
 ///  "required": [
 ///    "action",
@@ -2977,6 +2981,10 @@ always carries `net_key`; operations on different nets are never merged.*/
 ///    "net_key": {
 ///      "type": "string"
 ///    },
+///    "offset_nm": {
+///      "description": "Signed offset of `shape` in its local frame, before `affine`: the\nMinkowski sum with a disk of this radius when positive, or the erosion\nby it when negative, with round corners. It is present only where the\noffset shape has no closed form in this vocabulary: KiCad's polygonal\ninflation of trapezoid, chamfered, and custom pad openings, and the\nmask opening of a copper graphic grown by its margin. Never zero.",
+///      "$ref": "#/$defs/Nm"
+///    },
 ///    "shape": {
 ///      "$ref": "#/$defs/Shape2d"
 ///    },
@@ -3006,6 +3014,18 @@ pub struct SurfaceOperation {
         skip_serializing_if = "::std::option::Option::is_none"
     )]
     pub net_key: ::std::option::Option<::std::string::String>,
+    /**Signed offset of `shape` in its local frame, before `affine`: the
+    Minkowski sum with a disk of this radius when positive, or the erosion
+    by it when negative, with round corners. It is present only where the
+    offset shape has no closed form in this vocabulary: KiCad's polygonal
+    inflation of trapezoid, chamfered, and custom pad openings, and the
+    mask opening of a copper graphic grown by its margin. Never zero.*/
+    #[serde(
+        default,
+        deserialize_with = "crate::deserialize_present_nonnull",
+        skip_serializing_if = "::std::option::Option::is_none"
+    )]
+    pub offset_nm: ::std::option::Option<Nm>,
     pub shape: Shape2d,
     pub slice_key: ::std::string::String,
 }

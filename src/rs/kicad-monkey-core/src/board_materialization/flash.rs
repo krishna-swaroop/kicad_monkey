@@ -104,6 +104,32 @@ fn plot(source: &str) -> Result<crate::board_plotter_ir::BoardPlotDocument, crat
     board_plot_document(source, limits)
 }
 
+/// Board plot document for technical-layer graphics: routing, zones, pads,
+/// and 3D models are blanked first, since they carry no technical-layer
+/// graphics here. `None` when the board cannot be plotted.
+pub(crate) fn presentation_plot(
+    source: &str,
+    view: &PcbView<'_>,
+) -> Option<crate::board_plotter_ir::BoardPlotDocument> {
+    let stripped = blank_top_level(source, view, |head| {
+        matches!(head, "segment" | "arc" | "via" | "zone")
+    })
+    .ok()?;
+    let stripped = blank_heads(&stripped, &["pad", "model", "zone"]).ok()?;
+    let mut limits = BoardPlotLimits::default();
+    limits.max_source_bytes = limits
+        .max_source_bytes
+        .max(stripped.len().saturating_add(1));
+    limits.max_graphics = limits.max_graphics.max(1_000_000);
+    limits.max_parse_nodes = limits.max_parse_nodes.max(4_000_000);
+    limits.max_input_points = limits.max_input_points.max(4_000_000);
+    limits.max_input_polygons = limits.max_input_polygons.max(1_000_000);
+    limits.max_metadata_bytes = limits.max_metadata_bytes.max(128 * 1024 * 1024);
+    limits.max_text_bytes = limits.max_text_bytes.max(64 * 1024 * 1024);
+    limits.max_operations = limits.max_operations.max(1_000_000);
+    board_plot_document(&stripped, limits).ok()
+}
+
 /// Resolve flash layers, consulting plot facts only when required.
 pub(crate) fn flash_layers(
     source: &str,

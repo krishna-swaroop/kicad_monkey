@@ -31,7 +31,15 @@ fn line(end: NmPoint) -> PathSegment {
 
 pub(crate) fn tracks(segments: &[PcbSegment], stack: &CopperStack, emitter: &mut Emitter) {
     for segment in segments {
+        let uid = source_uid("track", segment.uuid.as_deref(), segment.source_range.start);
         let (Some(layer), Some(width)) = (segment.layer.as_deref(), segment.width) else {
+            // KiCad writes exposed-mask tracks as `(layers "F.Cu" "F.Mask")`,
+            // which the source model does not decode yet.
+            emitter.warn(
+                "track_layer_not_decoded",
+                "track has no single decoded layer and is not materialized".to_owned(),
+                Some(uid),
+            );
             continue;
         };
         let Some(slice) = stack.key(layer) else {
@@ -40,7 +48,6 @@ pub(crate) fn tracks(segments: &[PcbSegment], stack: &CopperStack, emitter: &mut
         if width <= 0.0 {
             continue;
         }
-        let uid = source_uid("track", segment.uuid.as_deref(), segment.source_range.start);
         let origin = Origin::routed(BindingSourceKind::Track, uid, net_key(&segment.net));
         let shape = swept(
             nm_point(segment.start_x, segment.start_y),
@@ -54,6 +61,15 @@ pub(crate) fn tracks(segments: &[PcbSegment], stack: &CopperStack, emitter: &mut
 pub(crate) fn track_arcs(arcs: &[PcbRoutingArc], stack: &CopperStack, emitter: &mut Emitter) {
     for arc in arcs {
         let (Some(layer), Some(width)) = (arc.layer.as_deref(), arc.width) else {
+            emitter.warn(
+                "track_layer_not_decoded",
+                "track arc has no single decoded layer and is not materialized".to_owned(),
+                Some(source_uid(
+                    "track_arc",
+                    arc.uuid.as_deref(),
+                    arc.source_range.start,
+                )),
+            );
             continue;
         };
         let Some(slice) = stack.key(layer) else {

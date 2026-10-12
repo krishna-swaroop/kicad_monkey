@@ -8,7 +8,8 @@ use super::holes::HoleSpec;
 use kicad_monkey_contracts::generated::materialization_document::{
     Affine2D, Backdrill, BindingEntry, BindingSourceKind, DiagnosticSeverity, HoleOperation,
     HolePlating, HoleProtection, MaterialAction, MaterialOperation, MaterialProduct,
-    MaterializationDiagnostic, NonNegativeNm, Shape2d, SurfaceMaterial, SurfaceOperation,
+    MaterializationDiagnostic, Nm, NmBounds, NonNegativeNm, Shape2d, SurfaceMaterial,
+    SurfaceOperation,
 };
 
 /// KiCad object an operation came from.
@@ -67,6 +68,26 @@ pub(crate) fn source_uid(kind: &str, uuid: Option<&str>, source_start: usize) ->
         .map_or_else(|| format!("{kind}@{source_start}"), str::to_owned)
 }
 
+/// Bounds grown by a positive local offset scaled into the board frame.
+/// A negative offset only shrinks the shape, so the bounds stay valid.
+fn grown(bounds: NmBounds, offset_nm: i32, affine: &Affine2D) -> NmBounds {
+    if offset_nm <= 0 {
+        return bounds;
+    }
+    let scale = affine
+        .m11
+        .hypot(affine.m21)
+        .max(affine.m12.hypot(affine.m22));
+    let grow = (f64::from(offset_nm) * scale).ceil() as i64;
+    let clamp = |value: i64| Nm(value.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32);
+    NmBounds {
+        min_x_nm: clamp(i64::from(*bounds.min_x_nm) - grow),
+        min_y_nm: clamp(i64::from(*bounds.min_y_nm) - grow),
+        max_x_nm: clamp(i64::from(*bounds.max_x_nm) + grow),
+        max_y_nm: clamp(i64::from(*bounds.max_y_nm) + grow),
+    }
+}
+
 impl Emitter {
     fn next_index(&self) -> u32 {
         u32::try_from(self.operations.len()).unwrap_or(u32::MAX)
@@ -108,8 +129,22 @@ impl Emitter {
         shape: Shape2d,
         affine: Affine2D,
     ) {
+        self.offset_surface(origin, slice_key, material, shape, affine, 0);
+    }
+
+    /// Add or subtract `material` on `slice_key`, with `shape` offset by
+    /// `offset_nm` in its local frame (recorded only when nonzero).
+    pub(crate) fn offset_surface(
+        &mut self,
+        origin: &Origin,
+        slice_key: &str,
+        material: Material,
+        shape: Shape2d,
+        affine: Affine2D,
+        offset_nm: i32,
+    ) {
         let index = self.next_index();
-        let bounds = board_bounds(&shape, &affine);
+        let bounds = grown(board_bounds(&shape, &affine), offset_nm, &affine);
         self.bind(index, origin, material.net_key.as_deref());
         self.operations
             .push(MaterialOperation::SurfaceOperation(SurfaceOperation {
@@ -120,6 +155,7 @@ impl Emitter {
                 slice_key: slice_key.to_owned(),
                 net_key: material.net_key,
                 shape,
+                offset_nm: (offset_nm != 0).then_some(Nm(offset_nm)),
                 affine,
                 bounds,
             }));

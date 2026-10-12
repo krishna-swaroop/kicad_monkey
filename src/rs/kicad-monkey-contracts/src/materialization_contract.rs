@@ -12,7 +12,7 @@
 //! decoder parses to a `Value` first, which does.
 
 use crate::generated::materialization_document::{
-    Affine2D, ChunkEntry, HoleOperation, MaterialOperation, MaterializationDocumentA0,
+    Affine2D, ChunkEntry, HoleOperation, HolePlating, MaterialOperation, MaterializationDocumentA0,
     MaterializationScope, NmBounds, Shape2d, SurfaceMaterial, SurfaceOperation,
 };
 use crate::{ValidationError, validation_error};
@@ -296,6 +296,17 @@ fn validate_surface(
         (Some(net), true) => check_net(keys, net, &format!("{path}.net_key"))?,
         (None, false) => {}
     }
+    if surface
+        .offset_nm
+        .as_ref()
+        .is_some_and(|offset| **offset == 0)
+    {
+        return Err(validation_error(
+            "invalid_offset",
+            format!("{path}.offset_nm"),
+            "a zero offset is written by omitting offset_nm",
+        ));
+    }
     validate_affine(&surface.affine, &format!("{path}.affine"))?;
     validate_bounds(&surface.bounds, &format!("{path}.bounds"))?;
     validate_shape(&surface.shape, &format!("{path}.shape"))
@@ -308,8 +319,17 @@ fn validate_hole(hole: &HoleOperation, keys: &Keys<'_>, path: &str) -> Result<()
         &format!("{path}.start_slice_key"),
     )?;
     check_slice(keys, &hole.end_slice_key, &format!("{path}.end_slice_key"))?;
-    if let Some(net) = &hole.net_key {
-        check_net(keys, net, &format!("{path}.net_key"))?;
+    let plated = matches!(hole.plating, HolePlating::Plated);
+    match (&hole.net_key, plated) {
+        (Some(net), true) => check_net(keys, net, &format!("{path}.net_key"))?,
+        (None, false) => {}
+        _ => {
+            return Err(validation_error(
+                "invalid_hole_net",
+                format!("{path}.net_key"),
+                "plated holes carry a net key and unplated holes do not",
+            ));
+        }
     }
     for (position, backdrill) in hole.backdrills.iter().enumerate() {
         if let Some(slice) = &backdrill.until_slice_key {
@@ -444,17 +464,35 @@ fn check_corner(size: i64, width: i64, height: i64, path: &str) -> Result<(), Va
     ))
 }
 
+fn operation_net(operation: &MaterialOperation) -> Option<&str> {
+    match operation {
+        MaterialOperation::SurfaceOperation(surface) => surface.net_key.as_deref(),
+        MaterialOperation::HoleOperation(hole) => hole.net_key.as_deref(),
+    }
+}
+
+/// Binding entries reference existing operations in ascending order and
+/// carry their operation's net key. Coverage is not required: geometry-only
+/// documents may bind a subset (the producer binds every operation).
 fn validate_binding(document: &MaterializationDocumentA0) -> Result<(), ValidationError> {
-    let count = document.operations.len();
     let mut previous: Option<u32> = None;
     for (position, entry) in document.binding.iter().enumerate() {
-        let in_range = usize::try_from(entry.operation_index).is_ok_and(|index| index < count);
+        let operation = usize::try_from(entry.operation_index)
+            .ok()
+            .and_then(|index| document.operations.get(index));
         let ascending = previous.is_none_or(|last| entry.operation_index > last);
-        if !in_range || !ascending {
+        let Some(operation) = operation.filter(|_| ascending) else {
             return Err(validation_error(
                 "invalid_binding",
                 format!("$.binding[{position}].operation_index"),
                 "binding entries reference existing operations in ascending order",
+            ));
+        };
+        if entry.net_key.as_deref() != operation_net(operation) {
+            return Err(validation_error(
+                "invalid_binding",
+                format!("$.binding[{position}].net_key"),
+                "a binding entry carries its operation's net key",
             ));
         }
         previous = Some(entry.operation_index);

@@ -286,6 +286,10 @@ enum SurfaceMaterial {
 /**
  * Add or remove one shape of material on one slice. Conductive material
  * always carries `net_key`; operations on different nets are never merged.
+ *
+ * Operations combine without regard to order: the material on a slice is
+ * the union of its `add` shapes minus the union of its `subtract` shapes,
+ * taken per material and, for conductive material, per net.
  */
 model SurfaceOperation {
   kind: "surface";
@@ -295,6 +299,17 @@ model SurfaceOperation {
   slice_key: string;
   net_key?: string;
   shape: Shape2d;
+
+  /**
+   * Signed offset of `shape` in its local frame, before `affine`: the
+   * Minkowski sum with a disk of this radius when positive, or the erosion
+   * by it when negative, with round corners. It is present only where the
+   * offset shape has no closed form in this vocabulary: KiCad's polygonal
+   * inflation of trapezoid, chamfered, and custom pad openings, and the
+   * mask opening of a copper graphic grown by its margin. Never zero.
+   */
+  offset_nm?: Nm;
+
   affine: Affine2D;
   bounds: NmBounds;
 }

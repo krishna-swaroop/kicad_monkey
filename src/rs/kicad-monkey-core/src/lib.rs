@@ -128,7 +128,7 @@ pub use kicad_netlist::{
 };
 pub use newstroke::{
     NewstrokeError, NewstrokeErrorKind, NewstrokeLimits, NewstrokeOutput, NewstrokePoint,
-    NewstrokePolyline, NewstrokeRequest, realize_newstroke_a0,
+    NewstrokePolyline, NewstrokeRequest, realize_newstroke_a0, realize_newstroke_kicad_a0,
 };
 pub use pcb::{
     PcbBarcode, PcbBoardMetadata, PcbBoardVariant, PcbComponentClassRef, PcbCounts, PcbDimension,

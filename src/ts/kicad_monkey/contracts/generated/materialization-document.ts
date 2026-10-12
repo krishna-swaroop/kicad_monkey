@@ -206,6 +206,10 @@ export interface NmBounds1 {
 /**
  * Add or remove one shape of material on one slice. Conductive material
  * always carries `net_key`; operations on different nets are never merged.
+ *
+ * Operations combine without regard to order: the material on a slice is
+ * the union of its `add` shapes minus the union of its `subtract` shapes,
+ * taken per material and, for conductive material, per net.
  */
 export interface SurfaceOperation {
   kind: "surface";
@@ -215,6 +219,11 @@ export interface SurfaceOperation {
   slice_key: string;
   net_key?: string;
   shape: Shape2D;
+  /**
+   * Board-frame length in integer nanometres. The range matches KiCad's own
+   * 32-bit internal-unit limit, so the packed encoding stores it losslessly.
+   */
+  offset_nm?: number;
   affine: Affine2D;
   bounds: NmBounds;
 }

@@ -124,9 +124,10 @@ pub(crate) fn via_holes(vias: &[PcbVia], stack: &CopperStack, holes: &mut Vec<Ho
     }
 }
 
-/// The hole of `pad`, if it has one. Plated holes span every copper layer;
-/// unplated holes span the pad's copper layers, or the whole board when it
-/// lists none.
+/// The hole of `pad`, if it has one. Every pad hole is drilled through the
+/// whole board, plated or not. The hole sits at the pad position; the
+/// `(drill (offset ...))` moves the copper shape, not the hole. A round
+/// drill uses its X size, as KiCad does.
 pub(crate) fn pad_hole(
     pad: &PcbPad,
     frame: &PadFrame,
@@ -139,11 +140,7 @@ pub(crate) fn pad_hole(
         return None;
     }
     let plated = pad.plated.unwrap_or(pad.kind != "np_thru_hole");
-    let layers = if plated {
-        stack.names.clone()
-    } else {
-        stack.expand(&pad.layers)
-    };
+    let layers = stack.names.clone();
     let plating = if plated {
         HolePlating::Plated
     } else {
@@ -153,12 +150,13 @@ pub(crate) fn pad_hole(
     facts.backdrills = backdrills([pad.backdrill.as_ref(), pad.tertiary_drill.as_ref()], stack);
     let shape = match drill.shape {
         PcbHoleShape::Oval if (drill.width - height).abs() > 1e-9 => oval(drill.width, height),
-        _ => round_hole(drill.width.min(height)),
+        PcbHoleShape::Oval => round_hole(drill.width.min(height)),
+        _ => round_hole(drill.width),
     };
     Some(HoleSpec {
         origin,
         facts,
         shape,
-        affine: frame.affine(drill.offset.x, drill.offset.y),
+        affine: frame.affine(0.0, 0.0),
     })
 }

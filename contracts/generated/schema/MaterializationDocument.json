@@ -625,6 +625,10 @@
                 "shape": {
                     "$ref": "#/$defs/Shape2d"
                 },
+                "offset_nm": {
+                    "$ref": "#/$defs/Nm",
+                    "description": "Signed offset of `shape` in its local frame, before `affine`: the\nMinkowski sum with a disk of this radius when positive, or the erosion\nby it when negative, with round corners. It is present only where the\noffset shape has no closed form in this vocabulary: KiCad's polygonal\ninflation of trapezoid, chamfered, and custom pad openings, and the\nmask opening of a copper graphic grown by its margin. Never zero."
+                },
                 "affine": {
                     "$ref": "#/$defs/Affine2D"
                 },
@@ -645,7 +649,7 @@
             "unevaluatedProperties": {
                 "not": {}
             },
-            "description": "Add or remove one shape of material on one slice. Conductive material\nalways carries `net_key`; operations on different nets are never merged."
+            "description": "Add or remove one shape of material on one slice. Conductive material\nalways carries `net_key`; operations on different nets are never merged.\n\nOperations combine without regard to order: the material on a slice is\nthe union of its `add` shapes minus the union of its `subtract` shapes,\ntaken per material and, for conductive material, per net."
         },
         "HoleOperation": {
             "type": "object",

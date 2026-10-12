@@ -13,6 +13,19 @@ pub struct PcbSetup {
     pub allow_soldermask_bridges_in_footprints: bool,
     pub tenting_front: bool,
     pub tenting_back: bool,
+    /// Whether `(tenting ...)` is declared. Without it, KiCad uses the
+    /// legacy `viasonmask` plot option, and otherwise tents both sides.
+    pub has_tenting: bool,
+    /// Legacy `(pcbplotparams (viasonmask ...))`, when declared.
+    pub legacy_vias_on_mask: Option<bool>,
+    /// Board solder-mask expansion (`pad_to_mask_clearance`), mm.
+    pub pad_to_mask_clearance: f64,
+    /// Minimum solder-mask web width (`solder_mask_min_width`), mm.
+    pub solder_mask_min_width: f64,
+    /// Board solder-paste margin (`pad_to_paste_clearance`), mm.
+    pub pad_to_paste_clearance: f64,
+    /// Board solder-paste margin ratio (`pad_to_paste_clearance_ratio`).
+    pub pad_to_paste_clearance_ratio: f64,
     pub covering_front: bool,
     pub covering_back: bool,
     pub plugging_front: bool,
@@ -79,6 +92,20 @@ fn setup_from_span(source: &str, span: &FormSpan, limits: PcbLimits) -> Result<P
         )?,
         tenting_front: side_enabled(source, &children, "tenting", "front", limits)?,
         tenting_back: side_enabled(source, &children, "tenting", "back", limits)?,
+        has_tenting: child(&children, "tenting").is_some(),
+        legacy_vias_on_mask: legacy_vias_on_mask(source, &children, limits)?,
+        pad_to_mask_clearance: optional_child_f64(source, &children, "pad_to_mask_clearance")?
+            .unwrap_or(0.0),
+        solder_mask_min_width: optional_child_f64(source, &children, "solder_mask_min_width")?
+            .unwrap_or(0.0),
+        pad_to_paste_clearance: optional_child_f64(source, &children, "pad_to_paste_clearance")?
+            .unwrap_or(0.0),
+        pad_to_paste_clearance_ratio: optional_child_f64(
+            source,
+            &children,
+            "pad_to_paste_clearance_ratio",
+        )?
+        .unwrap_or(0.0),
         covering_front: side_enabled(source, &children, "covering", "front", limits)?,
         covering_back: side_enabled(source, &children, "covering", "back", limits)?,
         plugging_front: side_enabled(source, &children, "plugging", "front", limits)?,
@@ -90,6 +117,21 @@ fn setup_from_span(source: &str, span: &FormSpan, limits: PcbLimits) -> Result<P
             .transpose()?,
         source_range: span.range.clone(),
     })
+}
+
+fn legacy_vias_on_mask(
+    source: &str,
+    setup_children: &[FormSpan],
+    limits: PcbLimits,
+) -> Result<Option<bool>, Error> {
+    let Some(span) = child(setup_children, "pcbplotparams") else {
+        return Ok(None);
+    };
+    let fields = direct_children(source, span, limits.max_setup_children, limits)?;
+    if child(&fields, "viasonmask").is_none() {
+        return Ok(None);
+    }
+    child_bool(source, &fields, "viasonmask").map(Some)
 }
 
 fn side_enabled(

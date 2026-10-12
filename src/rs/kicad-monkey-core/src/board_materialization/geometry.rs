@@ -70,12 +70,24 @@ pub(crate) fn rotate_mm(x: f64, y: f64, angle_deg: f64) -> (f64, f64) {
     )
 }
 
-fn apply(affine: &Affine2D, x: i64, y: i64) -> (i64, i64) {
+/// `affine` applied to a local point, unrounded, so bounds can round
+/// outward.
+fn apply(affine: &Affine2D, x: i64, y: i64) -> (f64, f64) {
     let (xf, yf) = (x as f64, y as f64);
     (
-        (affine.m11 * xf + affine.m12 * yf).round() as i64 + i64::from(*affine.tx_nm),
-        (affine.m21 * xf + affine.m22 * yf).round() as i64 + i64::from(*affine.ty_nm),
+        affine.m11 * xf + affine.m12 * yf + f64::from(*affine.tx_nm),
+        affine.m21 * xf + affine.m22 * yf + f64::from(*affine.ty_nm),
     )
+}
+
+/// Integer box around `[min_x, min_y, max_x, max_y]`, rounded outward.
+fn outward(bounds: [f64; 4]) -> [i64; 4] {
+    [
+        bounds[0].floor() as i64,
+        bounds[1].floor() as i64,
+        bounds[2].ceil() as i64,
+        bounds[3].ceil() as i64,
+    ]
 }
 
 /// Local bounds (min_x, min_y, max_x, max_y) of an analytic shape.
@@ -312,14 +324,14 @@ fn similarity_scale(affine: &Affine2D) -> Option<f64> {
 /// (or capsule ends) and grow by the scaled radius.
 fn round_bounds(shape: &Shape2d, affine: &Affine2D) -> Option<[i64; 4]> {
     let scale = similarity_scale(affine)?;
-    let radius = |value: i64| (value as f64 * scale).ceil() as i64;
+    let radius = |value: i64| value as f64 * scale;
     let place = |point: &NmPoint| {
         let (x, y) = xy(point);
         apply(affine, x, y)
     };
-    let disc = |center: &NmPoint, r: i64| {
+    let disc = |center: &NmPoint, r: f64| {
         let (x, y) = place(center);
-        [x - r, y - r, x + r, y + r]
+        outward([x - r, y - r, x + r, y + r])
     };
     match shape {
         Shape2d::Disk2d(disk) => Some(disc(&disk.center_nm, radius(*disk.radius_nm))),
@@ -357,11 +369,20 @@ fn box_bounds(shape: &Shape2d, affine: &Affine2D) -> [i64; 4] {
         apply(affine, local[2], local[3]),
         apply(affine, local[0], local[3]),
     ];
-    let min_x = corners.iter().map(|corner| corner.0).min().unwrap_or(0);
-    let min_y = corners.iter().map(|corner| corner.1).min().unwrap_or(0);
-    let max_x = corners.iter().map(|corner| corner.0).max().unwrap_or(0);
-    let max_y = corners.iter().map(|corner| corner.1).max().unwrap_or(0);
-    [min_x, min_y, max_x, max_y]
+    let fold = |pick: fn(&(f64, f64)) -> f64, min: bool| {
+        corners
+            .iter()
+            .map(pick)
+            .fold(if min { f64::MAX } else { f64::MIN }, |a, b| {
+                if min { a.min(b) } else { a.max(b) }
+            })
+    };
+    outward([
+        fold(|corner| corner.0, true),
+        fold(|corner| corner.1, true),
+        fold(|corner| corner.0, false),
+        fold(|corner| corner.1, false),
+    ])
 }
 
 #[cfg(test)]

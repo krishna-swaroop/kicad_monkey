@@ -114,7 +114,9 @@ fn main() {
         .iter()
         .map(|slice| slice.key.clone())
         .collect();
-    for key in &slice_keys {
+    // KM_GATE_SKIP_RULE2=1 skips the rule-2 scopes, for quick document dumps.
+    let rule_two = std::env::var_os("KM_GATE_SKIP_RULE2").is_none();
+    for key in slice_keys.iter().filter(|_| rule_two) {
         for products in [
             &["copper"][..],
             &["holes"][..],
@@ -126,10 +128,28 @@ fn main() {
                 &request(products, std::slice::from_ref(key), source.len()),
             )
             .unwrap_or_else(|error| fail(&error.to_string()));
-            let filtered = filter_document(&complete, &selective.scope);
-            if serde_json::to_value(&selective).ok() != serde_json::to_value(&filtered).ok() {
-                fail(&format!("rule 2 failed for {products:?} on {key}"));
-            }
+            check_rule_two(&complete, &selective, products, key);
+            scopes += 1;
+        }
+    }
+    // Technical products: every technical slice, one copper slice, and the
+    // whole board, each alone and together with copper.
+    let technical_keys = slice_keys
+        .iter()
+        .filter(|key| !key.starts_with("dielectric") && !key.starts_with("copper.in"))
+        .cloned()
+        .chain(std::iter::once(String::new()));
+    for key in technical_keys.filter(|_| rule_two) {
+        for products in [
+            &["solder_mask"][..],
+            &["paste"][..],
+            &["silkscreen"][..],
+            &["copper", "solder_mask"][..],
+        ] {
+            let slices: Vec<String> = (!key.is_empty()).then(|| key.clone()).into_iter().collect();
+            let selective = materialize_board(&source, &request(products, &slices, source.len()))
+                .unwrap_or_else(|error| fail(&error.to_string()));
+            check_rule_two(&complete, &selective, products, &key);
             scopes += 1;
         }
     }
@@ -153,7 +173,43 @@ fn main() {
         "diagnostics": diagnostics,
         "rule2_scopes_checked": scopes,
         "profile": profile_summary(&value),
+        "materials": material_counts(&value),
         "json_bytes": text.len(),
     });
     println!("{summary}");
+}
+
+fn check_rule_two(
+    complete: &kicad_monkey_contracts::generated::materialization_document::MaterializationDocumentA0,
+    selective: &kicad_monkey_contracts::generated::materialization_document::MaterializationDocumentA0,
+    products: &[&str],
+    key: &str,
+) {
+    let filtered = filter_document(complete, &selective.scope);
+    if serde_json::to_value(selective).ok() != serde_json::to_value(&filtered).ok() {
+        fail(&format!("rule 2 failed for {products:?} on {key:?}"));
+    }
+}
+
+/// Operation counts per (material, action, slice) for surface operations.
+fn material_counts(document: &Value) -> BTreeMap<String, usize> {
+    let mut counts = BTreeMap::new();
+    for operation in document["operations"].as_array().into_iter().flatten() {
+        if operation["kind"] != "surface" || operation["material"] == "copper" {
+            continue;
+        }
+        let key = format!(
+            "{}/{}/{}{}",
+            operation["material"].as_str().unwrap_or("?"),
+            operation["action"].as_str().unwrap_or("?"),
+            operation["slice_key"].as_str().unwrap_or("?"),
+            if operation["offset_nm"].is_null() {
+                ""
+            } else {
+                "/offset"
+            },
+        );
+        *counts.entry(key).or_insert(0usize) += 1;
+    }
+    counts
 }

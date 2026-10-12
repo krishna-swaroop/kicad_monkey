@@ -5,17 +5,19 @@
 //! already a board-frame angle, so the land affine rotates by the pad angle
 //! alone (matching the KiCad-Prism producer this was ported from).
 
+use super::emit::source_uid;
 use super::emit::{Emitter, Origin};
 use super::geometry::{nm, origin, pcb_point, rotate_mm, rotation_translation};
+use super::nets::net_key;
 use super::routing::polyline_contour;
 use crate::pcb::{
-    PcbPad, PcbPadCustomPrimitive, PcbPadPrimitiveGeometry, PcbPoint, PcbPolygonPoint,
-    PcbResolvedPadCopperLayer,
+    PcbFootprint, PcbPad, PcbPadCustomPrimitive, PcbPadPrimitiveGeometry, PcbPoint,
+    PcbPolygonPoint, PcbResolvedPadCopperLayer,
 };
 use kicad_monkey_contracts::generated::materialization_document::{
-    Affine2D, Annulus2d, ArcSegment, Capsule2d, ChamferedRect2d, Contour, CubicSegment, Disk2d,
-    LineSegment, Nm, NmPoint, NonNegativeNm, PathCap, PathJoin, PathSegment, PlanarRegion2d,
-    Rect2d, RectCorner, RoundedRect2d, Shape2d, SweptPath2d, Trapezoid2d,
+    Affine2D, Annulus2d, ArcSegment, BindingSourceKind, Capsule2d, ChamferedRect2d, Contour,
+    CubicSegment, Disk2d, LineSegment, Nm, NmPoint, NonNegativeNm, PathCap, PathJoin, PathSegment,
+    PlanarRegion2d, Rect2d, RectCorner, RoundedRect2d, Shape2d, SweptPath2d, Trapezoid2d,
 };
 
 fn len(value_mm: f64) -> NonNegativeNm {
@@ -55,6 +57,92 @@ impl PadFrame {
     }
 }
 
+/// Reference designator of `footprint`, or its library link when unset.
+pub(crate) fn reference(footprint: &PcbFootprint) -> String {
+    footprint
+        .reference
+        .clone()
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| footprint.library_link.clone())
+}
+
+/// A pad with its owning footprint, binding origin, and board placement.
+pub(crate) struct PlacedPad<'a> {
+    pub footprint: &'a PcbFootprint,
+    pub origin: Origin,
+    pub frame: PadFrame,
+}
+
+/// Place `pad`, or report it when its footprint is missing.
+pub(crate) fn place_pad<'a>(
+    pad: &PcbPad,
+    footprints: &'a [PcbFootprint],
+    emitter: &mut Emitter,
+) -> Option<PlacedPad<'a>> {
+    let uid = source_uid("pad", pad.uuid.as_deref(), pad.source_range.start);
+    let Some(footprint) = footprints.get(pad.footprint_index) else {
+        emitter.warn(
+            "missing_footprint",
+            format!("pad references missing footprint {}", pad.footprint_index),
+            Some(uid),
+        );
+        return None;
+    };
+    let frame = PadFrame::new(
+        pad,
+        footprint.at_x.unwrap_or_default(),
+        footprint.at_y.unwrap_or_default(),
+        footprint.angle.unwrap_or_default(),
+    );
+    let origin = Origin {
+        kind: BindingSourceKind::Pad,
+        uid,
+        refdes: Some(reference(footprint)),
+        pad_number: Some(pad.number.clone()),
+        net_key: net_key(&pad.net),
+    };
+    Some(PlacedPad {
+        footprint,
+        origin,
+        frame,
+    })
+}
+
+/// Shapes of one resolved pad layer in the pad frame: the pad shape (or a
+/// custom pad's anchor) and any custom primitives.
+#[derive(Default)]
+pub(crate) struct PadShapes {
+    pub base: Option<Shape2d>,
+    pub primitives: Vec<Shape2d>,
+}
+
+/// Build the shapes of `resolved`, reporting anything not materialized.
+pub(crate) fn pad_shapes(
+    resolved: &PcbResolvedPadCopperLayer<'_>,
+    origin: &Origin,
+    slice: &str,
+    emitter: &mut Emitter,
+) -> PadShapes {
+    if resolved.shape == "custom" {
+        return custom_shapes(resolved, origin, emitter);
+    }
+    let base = standard_shape(resolved);
+    if base.is_none() {
+        emitter.warn(
+            "unsupported_pad_shape",
+            format!(
+                "pad shape {} on {slice} is not materialized",
+                resolved.shape
+            ),
+            Some(origin.uid.clone()),
+        );
+    }
+    PadShapes {
+        base,
+        primitives: Vec::new(),
+    }
+}
+
 /// Emit the copper land of `pad` on one resolved layer.
 pub(crate) fn land(
     resolved: &PcbResolvedPadCopperLayer<'_>,
@@ -64,20 +152,9 @@ pub(crate) fn land(
     emitter: &mut Emitter,
 ) {
     let affine = frame.affine(resolved.offset.x, resolved.offset.y);
-    if resolved.shape == "custom" {
-        custom_land(resolved, &affine, origin, slice, emitter);
-        return;
-    }
-    match standard_shape(resolved) {
-        Some(shape) => emitter.copper(origin, slice, shape, affine),
-        None => emitter.warn(
-            "unsupported_pad_shape",
-            format!(
-                "pad shape {} on {slice} is not materialized",
-                resolved.shape
-            ),
-            Some(origin.uid.clone()),
-        ),
+    let shapes = pad_shapes(resolved, origin, slice, emitter);
+    for shape in shapes.base.into_iter().chain(shapes.primitives) {
+        emitter.copper(origin, slice, shape, affine.clone());
     }
 }
 
@@ -169,16 +246,14 @@ fn chamfered_rect(resolved: &PcbResolvedPadCopperLayer<'_>, width: f64, height: 
 }
 
 /// A custom pad is its anchor shape plus each primitive, all in the pad frame.
-fn custom_land(
+fn custom_shapes(
     resolved: &PcbResolvedPadCopperLayer<'_>,
-    affine: &Affine2D,
     origin: &Origin,
-    slice: &str,
     emitter: &mut Emitter,
-) {
+) -> PadShapes {
     let (width, height) = (resolved.size.x, resolved.size.y);
-    if width > 0.0 && height > 0.0 {
-        let anchor = if resolved.anchor == "rect" {
+    let base = (width > 0.0 && height > 0.0).then(|| {
+        if resolved.anchor == "rect" {
             Shape2d::Rect2d(Rect2d {
                 kind: "rect_2d".to_owned(),
                 center_nm: self::origin(),
@@ -187,12 +262,12 @@ fn custom_land(
             })
         } else {
             disk(width.min(height) / 2.0)
-        };
-        emitter.copper(origin, slice, anchor, affine.clone());
-    }
+        }
+    });
+    let mut primitives = Vec::new();
     for primitive in resolved.custom_primitives {
         match primitive_shape(primitive) {
-            Some(shape) => emitter.copper(origin, slice, shape, affine.clone()),
+            Some(shape) => primitives.push(shape),
             None => emitter.warn(
                 "unsupported_custom_pad_primitive",
                 format!(
@@ -203,6 +278,7 @@ fn custom_land(
             ),
         }
     }
+    PadShapes { base, primitives }
 }
 
 fn stroke(start: PcbPoint, segment: PathSegment, width: f64) -> Shape2d {
@@ -299,7 +375,7 @@ fn rect(start: PcbPoint, end: PcbPoint, radius: Option<f64>) -> Option<Shape2d> 
 }
 
 /// Polygon with any authored arcs kept as arc segments.
-fn polygon(points: &[PcbPolygonPoint]) -> Option<Shape2d> {
+pub(crate) fn polygon(points: &[PcbPolygonPoint]) -> Option<Shape2d> {
     let contour = if points
         .iter()
         .any(|point| matches!(point, PcbPolygonPoint::Arc { .. }))

@@ -283,7 +283,8 @@ fn apply_footprint_fabrication(
     match child.head.as_deref() {
         Some("solder_mask_margin") => result.solder_mask_margin = first_f64(source, child)?,
         Some("solder_paste_margin") => result.solder_paste_margin = first_f64(source, child)?,
-        Some("solder_paste_margin_ratio") => {
+        // `solder_paste_ratio` is KiCad's legacy spelling.
+        Some("solder_paste_margin_ratio" | "solder_paste_ratio") => {
             result.solder_paste_margin_ratio = first_f64(source, child)?;
         }
         Some("clearance") => result.clearance = first_f64(source, child)?,

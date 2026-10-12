@@ -271,10 +271,12 @@
         the slice are subtracted. The profile has no product of its own, so
         every operation belongs to exactly one product.</td></tr>
       <tr><td>solder_mask</td><td>For each side, the profile is added. Pad
-        openings grown by the resolved margin, untented via openings, and
-        mask-layer graphics and zones are subtracted.</td></tr>
+        openings grown by the resolved margin, untented via openings,
+        copper-graphic openings, and mask-layer graphics, text, and zones
+        are subtracted.</td></tr>
       <tr><td>paste</td><td>Paste-layer pads after the resolved margin and
-        ratio are applied, plus paste-layer graphics.</td></tr>
+        ratio are applied, plus paste-layer graphics, text, and
+        zones.</td></tr>
       <tr><td>silkscreen</td><td>Graphics as paths and regions. Stroke text
         uses core's Newstroke geometry, and outline text uses render
         caches.</td></tr>
@@ -490,6 +492,193 @@
       holds. No corpus board has back-drills, so these tests are the only
       evidence for the bore cut.</li>
   </ul>
+
+  <h2>Slice 3 status</h2>
+  <p>Slice 3 adds the solder mask, paste, and silkscreen products, copper
+  graphics, and the order-independent combination rule. The rules follow
+  KiCad 10.0.6's own source (<code>pad.cpp</code>,
+  <code>plot_board_layers.cpp</code>, <code>pcb_text.cpp</code>, the stroke
+  font, and the board parser) and are checked against its Gerbers.</p>
+  <h3>Decisions</h3>
+  <ul>
+    <li><strong>Combination rule.</strong> Operations combine without
+      regard to order: per slice and material (and per net for copper),
+      the material is the union of the adds minus the union of the
+      subtracts. Chunking already reorders operations, so no other rule was
+      sound.</li>
+    <li><strong>Offsets.</strong> Surface operations may carry a signed
+      <code>offset_nm</code>: the shape grown (or eroded) by a disk in its
+      local frame, with round corners. It appears only where the offset
+      shape has no closed form: trapezoid, chamfered, and custom pad
+      openings, and copper-graphic mask openings. It is never zero.</li>
+    <li><strong>Margins.</strong> Mask and paste margins resolve pad, then
+      footprint, then board, as KiCad does. Mask margins are clamped so the
+      opening stays non-negative. The paste ratio applies per axis, and
+      non-custom paste is clamped per axis. Pads without copper get no
+      margin. In format 20240201 and older, a local margin of 0 means
+      "inherit". Rules from <code>.kicad_dru</code> are not evaluated.</li>
+    <li><strong>Aperture shapes.</strong> Shapes follow KiCad's layer
+      plotter:
+      <ul>
+        <li>Circles and ovals are resized.</li>
+        <li>A rectangle grown by a positive margin becomes a rounded
+          rectangle of that radius.</li>
+        <li>A rounded rectangle grown equally on both axes adds the margin
+          to its radius. Otherwise it keeps its radius ratio.</li>
+        <li>A chamfered rectangle grown equally and positively is
+          offset. Otherwise it is resized.</li>
+        <li>A trapezoid is offset.</li>
+        <li>Custom primitives are offset. A shrinking margin shrinks the
+          anchor. Negative custom-pad offsets erode each primitive
+          separately, which is reported as
+          <code>custom_pad_eroded_per_primitive</code>.</li>
+      </ul></li>
+    <li><strong>Vias.</strong> A via opens the mask on an outer side when it
+      reaches that side and is not tented there. Tenting resolves in this
+      order: the via's own value, then the legacy <code>viasonmask</code>
+      plot option (KiCad parses it last), then <code>(tenting ...)</code>,
+      then tented. The opening is the via diameter plus twice the board
+      mask expansion.</li>
+    <li><strong>Graphics.</strong> Board and footprint graphics come from
+      the parsed source, not from the plot document, whose footprint pen
+      rules are for previews (a 0.1524 mm default and a 0.0847 mm minimum).
+      KiCad's own rule applies: filled shapes may have no stroke, and
+      unfilled shapes without one get 0.10 mm. Graphics on copper layers
+      are copper on their net. An outer-copper graphic that is also on its
+      mask layer, or carries <code>solder_mask_margin</code>, opens the mask
+      once, grown by its own margin or the board's.</li>
+    <li><strong>Text.</strong> Text comes from the plot document, which
+      resolves variables and render caches. A new core entry point,
+      <code>realize_newstroke_kicad_a0</code>, places stroke text exactly as
+      KiCad draws it:
+      <ul>
+        <li>Italics lean right, sheared about each glyph's baseline. The
+          existing <code>realize_newstroke_a0</code> leans the other way,
+          and its preview output is unchanged.</li>
+        <li>The anchor uses KiCad's line offsets, including its
+          stroke-width corrections.</li>
+        <li>The pen is KiCad's effective pen. From format 20260826 on, bold
+          stroke text multiplies its thickness by 1.6. The pen is clamped to
+          a quarter of the smaller size.</li>
+      </ul>
+      Footprint stroke text is placed in the board frame. Its angle is
+      board-relative before format 20260616 and footprint-relative from it
+      on. It is kept upright unless <code>unlocked</code>, and justification
+      and mirroring come from the source <code>justify</code>.</li>
+    <li><strong>Knockout text.</strong> KiCad's box is the glyph bounds in
+      the text frame, grown by max(pen / 2, height / 9). Outline glyphs
+      become holes of the box region, using even-odd nesting. Stroke glyphs
+      have no closed outline, so they are subtracted. Under the combination
+      rule, that also removes any other silkscreen under the glyphs. A
+      knockout on a mask layer is reported, not drawn.</li>
+    <li><strong>Not modelled, and reported:</strong>
+      <ul>
+        <li><code>solder_mask_min_width</code> web merging</li>
+        <li>hatched fills, drawn as outlines</li>
+        <li>dashed strokes, drawn solid</li>
+        <li>multi-line stroke text, laid out as one line</li>
+        <li>outline fonts without a render cache</li>
+        <li>tracks whose <code>(layers ...)</code> form the source model
+          does not decode</li>
+        <li>footprint scale and mirror transforms from format
+          20260616</li>
+      </ul>
+      Silkscreen is not clipped by mask openings; that is a fabrication
+      step.</li>
+    <li><strong>Review fixes.</strong>
+      <ul>
+        <li>Pad holes sit at the pad position; the drill offset moves only
+          the copper.</li>
+        <li>Every pad hole is drilled through the board.</li>
+        <li>Round drills use the X size.</li>
+        <li>Bounds round outward.</li>
+        <li>The validator rejects a zero <code>offset_nm</code>, binding
+          entries whose net differs from their operation's, and plated or
+          unplated holes with the wrong net.</li>
+        <li>The legacy footprint token <code>solder_paste_ratio</code> is
+          decoded.</li>
+      </ul></li>
+  </ul>
+  <h3>Evidence</h3>
+  <ul>
+    <li><strong>Gerber parity.</strong> The mask, paste, and silkscreen
+      layers were exported with <code>kicad-cli</code> 10.0.6 for the five
+      corpus boards, and compared by area with the materialized layers
+      (union of adds minus subtracts, mask openings within the profile).
+      The board properties were passed as text variables.
+      <ul>
+        <li>Mask: within 0.03% on every layer.</li>
+        <li>Paste: within 0.007% on every layer.</li>
+        <li>Silkscreen: within 0.14% on every layer except one.</li>
+      </ul>
+      The exception is charge_indicator's back silkscreen (20%). Its logo
+      uses the "Wavenumber" font, which is not installed on the comparison
+      machine. KiCad falls back to its stroke font, while the materializer
+      follows the board's saved render cache, which is what the designer
+      saw.</li>
+    <li><strong>Gaps found and closed by the comparison.</strong>
+      <ul>
+        <li>Preview pen widths on footprint paste polygons: backplane front
+          paste went from 15% to 0.002%.</li>
+        <li>Footprint text angle, keep-upright, justification, and mirroring:
+          JTYU-OBC silkscreen went from 93% and 107% to 0.03% and
+          0.009%.</li>
+        <li>The italic shear direction and anchor.</li>
+        <li>The knockout flag on stroke text, cached knockout boxes, and
+          effective pen widths.</li>
+      </ul></li>
+    <li><strong>Corpus gate.</strong> All five boards validate and are
+      deterministic, and every operation is bound. Rule 2 holds over 88 to
+      152 scopes per board, including each technical product alone and with
+      copper, on every technical slice and the whole board.</li>
+    <li><strong>Tests.</strong>
+      <code>board_materialization_technical</code> covers:
+      <ul>
+        <li>margin precedence and the pre-9.0 zero rule</li>
+        <li>aperture shapes and offsets</li>
+        <li>via tenting and the legacy override</li>
+        <li>paste ratios</li>
+        <li>zero-width fills</li>
+        <li>copper graphics and their mask opening</li>
+        <li>pad hole placement</li>
+        <li>knockout text</li>
+        <li>rule 2 and determinism for the technical products</li>
+      </ul></li>
+  </ul>
+  <h3>Performance and parallelism</h3>
+  <p>A profile of JTYU-OBC (release build, 1.7 s and 350 MB peak) shows
+  where the time goes:</p>
+  <ul>
+    <li>Two full board plot documents, for flash layers and for text: about
+      40%.</li>
+    <li>Zone polygon decoding, which lexes each point several times: about
+      21%.</li>
+    <li>Repeated footprint decoding: about 12%.</li>
+    <li>A final <code>filter_document</code> that clones a complete
+      result: about 4%.</li>
+    <li>Analytic emission itself: under 3%.</li>
+  </ul>
+  <p>The planned fixes, all deterministic, should bring OBC to about
+  0.9 s:</p>
+  <ul>
+    <li>flash layers from the parsed view;</li>
+    <li>single-pass zone decoding;</li>
+    <li>a family-filtered presentation plot;</li>
+    <li>shared footprint decoding;</li>
+    <li>skipping the filter for complete scopes.</li>
+  </ul>
+  <p>Parallelism:</p>
+  <ul>
+    <li><strong>Producer:</strong> source decoding, flash layers, and the
+      presentation plot are independent after the parse. They can run on
+      scoped threads behind a non-wasm feature, while emission stays
+      sequential so output stays byte-identical.</li>
+    <li><strong>Gate:</strong> the rule-2 scopes are independent. A
+      threaded loop measured 4.4 times faster.</li>
+    <li><strong>Prepared board:</strong> an API that keeps a prepared board
+      across requests would cut the gate from minutes to seconds.</li>
+  </ul>
+  <p>These belong to slice 5.</p>
 
   <h2>Porting from KiCad-Prism's analytic producer</h2>
   <p><code>prism-kicad-native</code> (<code>materialize.rs</code>,

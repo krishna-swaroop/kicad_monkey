@@ -376,6 +376,7 @@ fn producer_materializes_copper_holes_nets_and_binding() {
         operations
             .iter()
             .filter(|operation| operation["kind"] == kind && operation["shape"]["kind"] == field)
+            .filter(|operation| kind == "hole" || operation["material"] == "copper")
             .count()
     };
     // track + arc are swept paths; the via lands on 3 slices; the TH pad on 3.
@@ -398,13 +399,8 @@ fn producer_materializes_copper_holes_nets_and_binding() {
     codes.sort_unstable();
     assert_eq!(
         codes,
-        [
-            "outline_absent",
-            "product_not_materialized",
-            "product_not_materialized",
-            "product_not_materialized",
-            "stackup_absent"
-        ]
+        // The missing outline is reported for the dielectric and the mask.
+        ["outline_absent", "outline_absent", "stackup_absent"]
     );
 }
 
@@ -415,9 +411,9 @@ fn pads_compose_the_footprint_transform_and_bind_to_their_pins() {
     let smd = value["operations"]
         .as_array()
         .and_then(|operations| {
-            operations
-                .iter()
-                .find(|operation| operation["shape"]["kind"] == "rect_2d")
+            operations.iter().find(|operation| {
+                operation["shape"]["kind"] == "rect_2d" && operation["material"] == "copper"
+            })
         })
         .expect("the SMD land");
     // Local (1, 0) rotated by -90 degrees about the footprint at (10, 20).

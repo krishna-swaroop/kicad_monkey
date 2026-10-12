@@ -9,15 +9,19 @@
 //!
 //! Implemented products: copper (tracks, track arcs, via lands, stored zone
 //! fills, pad lands), holes (vias and pads, with protection and
-//! back-drill), and dielectric (the closed board profile per dielectric
-//! slice, minus crossing holes), with the full stack, nets, binding, and
-//! component records. Other products are reported as not yet materialized.
+//! back-drill), dielectric (the closed board profile per dielectric slice,
+//! minus crossing holes and back-drill bores), solder mask (the profile
+//! minus pad, via, and mask-layer openings), paste (pad apertures and
+//! paste-layer graphics), and silkscreen (graphics and text), with the full
+//! stack, nets, binding, and component records.
 
+mod apertures;
 mod chunking;
 mod dielectric;
 mod emit;
 mod flash;
 mod geometry;
+mod graphics;
 mod holes;
 mod layers;
 mod nets;
@@ -27,7 +31,9 @@ mod profile;
 mod routing;
 mod scope;
 mod sexpr_view;
+mod source_graphics;
 mod stack;
+mod technical;
 
 pub use chunking::{
     chunk_operations, operation_bounds, operation_net, operation_product, operation_slice,
@@ -77,10 +83,13 @@ pub(crate) fn error(code: &'static str, message: impl Into<String>) -> Materiali
 }
 
 /// Products this producer emits; the rest are reported as diagnostics.
-const IMPLEMENTED: [MaterialProduct; 4] = [
+const IMPLEMENTED: [MaterialProduct; 7] = [
     MaterialProduct::Copper,
     MaterialProduct::Holes,
     MaterialProduct::Dielectric,
+    MaterialProduct::SolderMask,
+    MaterialProduct::Paste,
+    MaterialProduct::Silkscreen,
     MaterialProduct::Components,
 ];
 
