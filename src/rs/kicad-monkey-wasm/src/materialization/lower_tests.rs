@@ -1,6 +1,6 @@
 use super::{
-    BATCH_WORDS, COVER_WORDS, FLAG_CHAMFER_SHIFT, FLAG_SUBTRACT, SHAPE_WORDS, arc_through,
-    flatten_cubic, kind,
+    BATCH_WORDS, COVER_WORDS, FLAG_CHAMFER_SHIFT, FLAG_SUBTRACT, LoweredSlice, SHAPE_WORDS,
+    arc_through, flatten_cubic, kind,
 };
 use crate::materialization::AnalyticPack;
 use kicad_monkey_core::board_materialization::materialize_board;
@@ -64,6 +64,29 @@ fn float(word: u32) -> f32 {
     f32::from_bits(word)
 }
 
+/// The inner fill lies within the outer one's bounds, so each gets its own
+/// batch; each batch's covers are the tiles its region fills.
+fn assert_tiled_batches(front: &LoweredSlice) {
+    assert_eq!(front.batches.len(), 2 * BATCH_WORDS);
+    assert_eq!(front.fan_vertices.len() % 6, 0);
+    let batches = front.batches.as_chunks::<BATCH_WORDS>().0;
+    let covers = front.covers.as_chunks::<COVER_WORDS>().0;
+    assert_eq!(
+        batches.iter().map(|b| b[4] as usize).sum::<usize>(),
+        covers.len()
+    );
+    for batch in batches {
+        let region = &covers[batch[3] as usize..(batch[3] + batch[4]) as usize];
+        assert!(
+            region.iter().all(|c| c[0] == region[0][0]),
+            "one region per batch here"
+        );
+        let tile =
+            |c: &[u32; COVER_WORDS]| (float(c[4]) - float(c[2])).max(float(c[5]) - float(c[3]));
+        assert!(region.iter().all(|c| tile(c) <= 1.0 + 1e-5));
+    }
+}
+
 #[test]
 fn copper_lowers_to_analytic_records_with_holes_as_subtracts() {
     let pack = pack();
@@ -105,15 +128,9 @@ fn copper_lowers_to_analytic_records_with_holes_as_subtracts() {
     assert!((float(trapezoid[19]) - 0.2).abs() < 1e-6, "dy/2 = 0.2 mm");
     // The cubic graphic is flattened into capsules.
     assert_eq!(front.stats.cubics_flattened, 1);
-    // The inner fill lies within the outer one's bounds, so each gets its
-    // own batch; fans hold a triangle per edge.
-    assert_eq!(front.batches.len(), 2 * BATCH_WORDS);
-    assert_eq!(front.covers.len(), 2 * COVER_WORDS);
-    assert_eq!(front.fan_vertices.len() % 6, 0);
-    // Each contour closes: one edge per fan triangle plus the two at its
-    // anchor (two contours here), and the edges' starts are their ends.
+    assert_tiled_batches(&front);
+    // Each contour closes: the edges' starts are their ends.
     let edges = front.contour_edges.as_chunks::<4>().0;
-    assert_eq!(edges.len(), front.fan_vertices.len() / 6 + 2 * 2);
     let key = |x: f32, y: f32| (x.to_bits(), y.to_bits());
     let mut starts: Vec<_> = edges.iter().map(|e| key(e[0], e[1])).collect();
     let mut ends: Vec<_> = edges.iter().map(|e| key(e[2], e[3])).collect();

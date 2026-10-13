@@ -5,13 +5,15 @@
 //! fragment shader evaluates exactly in the shape's local frame. Only curve
 //! segments the shader has no distance function for are flattened: cubic
 //! segments of swept paths, and every segment of planar regions, which are
-//! filled by the even-odd stencil rule. Regions are batched so that no two
-//! regions of one batch overlap, which keeps the even-odd fill of a batch
-//! equal to the union of its regions.
+//! filled by the even-odd stencil rule, in tiles (see `tiles`) so that no
+//! fan triangle is long enough to break the rasterizer's exactness. Regions
+//! are batched so that no two regions of one batch overlap, which keeps the
+//! even-odd fill of a batch equal to the union of its regions.
 //!
 //! Lengths are board millimetres (`f32`) in KiCad's frame, X right and Y
 //! down. A hole whose span crosses the slice is lowered as a subtract.
 
+use super::tiles::{TILE_MM, tile_region};
 use kicad_monkey_contracts::generated::materialization_document::{
     Affine2D, Contour, HoleOperation, MaterialAction, MaterialOperation, NmBounds, NmPoint,
     PathCap, PathSegment, RectCorner, Shape2d, SurfaceOperation,
@@ -19,7 +21,8 @@ use kicad_monkey_contracts::generated::materialization_document::{
 
 /// Words per shape record.
 pub const SHAPE_WORDS: usize = 20;
-/// Words per region cover record: operation, flags, then bounds.
+/// Words per region cover record (one per tile a region fills): operation,
+/// flags, then the tile within the region's bounds.
 pub const COVER_WORDS: usize = 6;
 /// Words per region batch: subtract flag, first fan vertex, fan vertex
 /// count, first cover, cover count.
@@ -560,17 +563,13 @@ impl Builder {
             let first_cover = out.covers.len() / COVER_WORDS;
             for position in &members {
                 let region = &self.regions[*position];
-                for contour in &region.contours {
-                    let anchor = contour[0];
-                    for pair in contour[1..].windows(2) {
-                        for (x, y) in [anchor, pair[0], pair[1]] {
-                            out.fan_vertices.extend([x, y]);
-                        }
-                    }
+                let tiled = tile_region(&region.contours, region.bounds, TILE_MM);
+                out.fan_vertices.extend(tiled.vertices);
+                for cover in tiled.covers {
+                    out.covers
+                        .extend([region.index, u32::from(region.subtract) * FLAG_SUBTRACT]);
+                    out.covers.extend(cover.map(f32::to_bits));
                 }
-                out.covers
-                    .extend([region.index, u32::from(region.subtract) * FLAG_SUBTRACT]);
-                out.covers.extend(region.bounds.map(f32::to_bits));
             }
             let count = |value: usize| u32::try_from(value).unwrap_or(u32::MAX);
             out.batches.extend([
@@ -578,7 +577,7 @@ impl Builder {
                 count(first_vertex),
                 count(out.fan_vertices.len() / 2 - first_vertex),
                 count(first_cover),
-                count(members.len()),
+                count(out.covers.len() / COVER_WORDS - first_cover),
             ]);
         }
         out

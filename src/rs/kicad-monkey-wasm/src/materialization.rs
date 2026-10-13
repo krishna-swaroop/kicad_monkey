@@ -3,6 +3,7 @@
 
 pub mod barrels;
 pub mod lower;
+pub mod tiles;
 
 use kicad_monkey_contracts::generated::materialization_document::{
     BindingEntry, HoleOperation, MaterialOperation, MaterializationDocumentA0,
