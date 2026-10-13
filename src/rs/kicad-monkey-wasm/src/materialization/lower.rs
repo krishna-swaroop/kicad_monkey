@@ -584,22 +584,42 @@ impl Builder {
     }
 }
 
-/// Whether the hole's copper span crosses the slice at `order`, given each
-/// slice key's order.
-fn hole_crosses(hole: &HoleOperation, order: u32, orders: &impl Fn(&str) -> Option<u32>) -> bool {
+/// Whether the hole crosses the slice at `order`, given each slice key's
+/// order and the orders of the outermost conductors: its copper span, and
+/// past an outer conductor it reaches every slice on that side (mask, paste,
+/// silkscreen), since the drill leaves the board there.
+fn hole_crosses(
+    hole: &HoleOperation,
+    order: u32,
+    orders: &impl Fn(&str) -> Option<u32>,
+    outer: Option<(u32, u32)>,
+) -> bool {
     match (orders(&hole.start_slice_key), orders(&hole.end_slice_key)) {
-        (Some(a), Some(b)) => a.min(b) <= order && order <= a.max(b),
+        (Some(a), Some(b)) => {
+            let (mut low, mut high) = (a.min(b), a.max(b));
+            if let Some((first, last)) = outer {
+                if low <= first {
+                    low = 0;
+                }
+                if high >= last {
+                    high = u32::MAX;
+                }
+            }
+            low <= order && order <= high
+        }
         _ => false,
     }
 }
 
 /// Lower the surface operations of one slice, and as subtracts the holes
-/// crossing it. `tolerance_nm` bounds the flattening error.
+/// crossing it. `outer` is the orders of the outermost conductors (see
+/// `hole_crosses`). `tolerance_nm` bounds the flattening error.
 pub fn lower_slice<'a>(
     surfaces: impl IntoIterator<Item = &'a MaterialOperation>,
     holes: &[HoleOperation],
     slice: (&str, u32),
     orders: &impl Fn(&str) -> Option<u32>,
+    outer: Option<(u32, u32)>,
     tolerance_nm: f64,
 ) -> LoweredSlice {
     let mut builder = Builder {
@@ -615,7 +635,7 @@ pub fn lower_slice<'a>(
     }
     for hole in holes
         .iter()
-        .filter(|hole| hole_crosses(hole, slice.1, orders))
+        .filter(|hole| hole_crosses(hole, slice.1, orders, outer))
     {
         let item = Item {
             index: hole.index,

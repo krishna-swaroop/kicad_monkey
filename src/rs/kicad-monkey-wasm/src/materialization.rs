@@ -6,7 +6,7 @@ pub mod lower;
 pub mod tiles;
 
 use kicad_monkey_contracts::generated::materialization_document::{
-    BindingEntry, HoleOperation, MaterialOperation, MaterializationDocumentA0,
+    BindingEntry, HoleOperation, MaterialOperation, MaterializationDocumentA0, SliceRole,
 };
 #[cfg(feature = "materialize")]
 use kicad_monkey_contracts::generated::materialization_request::MaterializationRequestA0;
@@ -92,11 +92,21 @@ impl AnalyticPack {
             }
         }
         let orders = |slice: &str| self.orders.get(slice).copied();
+        let conductors = || {
+            self.header
+                .stack
+                .slices
+                .iter()
+                .filter(|slice| slice.role == SliceRole::Conductor)
+                .map(|slice| slice.order)
+        };
+        let outer = conductors().min().zip(conductors().max());
         Ok(lower::lower_slice(
             &operations,
             &self.holes,
             (key, order),
             &orders,
+            outer,
             tolerance_nm,
         ))
     }

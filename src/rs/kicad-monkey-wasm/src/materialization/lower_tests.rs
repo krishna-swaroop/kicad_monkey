@@ -1,6 +1,6 @@
 use super::{
     BATCH_WORDS, COVER_WORDS, FLAG_CHAMFER_SHIFT, FLAG_SUBTRACT, LoweredSlice, SHAPE_WORDS,
-    arc_through, flatten_cubic, kind,
+    arc_through, flatten_cubic, hole_crosses, kind,
 };
 use crate::materialization::AnalyticPack;
 use kicad_monkey_core::board_materialization::materialize_board;
@@ -176,4 +176,38 @@ fn arcs_follow_their_midpoint_and_cubics_flatten_within_tolerance() {
     let points = flatten_cubic([(0.0, 0.0), (0.0, 1e6), (1e6, 1e6), (1e6, 0.0)], 1_000.0);
     assert!(points.len() > 4 && points.len() < 200, "{}", points.len());
     assert_eq!(points.last().copied(), Some((1e6, 0.0)));
+}
+
+#[test]
+fn holes_through_an_outer_conductor_cut_the_layers_beyond_it() {
+    // Mask 0, copper 1, core 2, copper 3, core 4, copper 5, mask 6.
+    let orders = |key: &str| match key {
+        "copper.front" => Some(1),
+        "copper.in1" => Some(3),
+        "copper.back" => Some(5),
+        _ => None,
+    };
+    let hole = |start: &str, end: &str| {
+        serde_json::from_value(json!({
+            "kind": "hole", "index": 0,
+            "affine": {"m11": 1.0, "m12": 0.0, "m21": 0.0, "m22": 1.0, "tx_nm": 0, "ty_nm": 0},
+            "bounds": {"min_x_nm": 0, "min_y_nm": 0, "max_x_nm": 1, "max_y_nm": 1},
+            "backdrills": [], "post_machining": [], "plating": "unplated",
+            "start_slice_key": start, "end_slice_key": end,
+            "shape": {"kind": "disk_2d", "center_nm": [0, 0], "radius_nm": 100_000}
+        }))
+        .expect("hole")
+    };
+    let crosses = |hole: &_, outer| {
+        (0..7)
+            .filter(|&order| hole_crosses(hole, order, &orders, outer))
+            .collect::<Vec<_>>()
+    };
+    let through = hole("copper.front", "copper.back");
+    assert_eq!(crosses(&through, Some((1, 5))), vec![0, 1, 2, 3, 4, 5, 6]);
+    // A blind hole leaves only the side it opens on.
+    let blind = hole("copper.front", "copper.in1");
+    assert_eq!(crosses(&blind, Some((1, 5))), vec![0, 1, 2, 3]);
+    // Without the outer conductors, only the copper span.
+    assert_eq!(crosses(&through, None), vec![1, 2, 3, 4, 5]);
 }
