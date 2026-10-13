@@ -80,7 +80,9 @@ pub struct LoweredSlice {
     pub covers: Vec<u32>,
     pub batches: Vec<u32>,
     /// Every region contour's edges, closed, as (x0, y0, x1, y1) board
-    /// millimetres: where an extruded slice has side walls.
+    /// millimetres: where an extruded slice has side walls. Each runs with
+    /// its region's material on its left (x right, y up as written): the
+    /// outer contour turns counter-clockwise, holes clockwise.
     pub contour_edges: Vec<f32>,
     /// Per contour edge, its region's operation index, with
     /// `EDGE_SUBTRACT` set for a subtracting region.
@@ -92,8 +94,9 @@ pub struct LoweredSlice {
     pub edge_cuts: Vec<u32>,
     pub cut_indices: Vec<u32>,
     /// The add shapes' outlines as closed edges (x0, y0, x1, y1), each
-    /// enclosing its shape within the tolerance (see `outlines`), and per edge
-    /// its add shape's index among the adds.
+    /// enclosing its shape within the tolerance (see `outlines`) and running
+    /// with the shape on its left, and per edge its add shape's index among
+    /// the adds.
     pub outline_edges: Vec<f32>,
     pub outline_shapes: Vec<u32>,
     pub stats: LowerStats,
@@ -573,9 +576,9 @@ impl Builder {
         out.shapes.extend(self.adds);
         for region in &self.regions {
             let operation = region.index | (u32::from(region.subtract) * EDGE_SUBTRACT);
-            for contour in &region.contours {
-                for (position, &(x0, y0)) in contour.iter().enumerate() {
-                    let (x1, y1) = contour[(position + 1) % contour.len()];
+            for (number, contour) in region.contours.iter().enumerate() {
+                // The outer contour (the first) counter-clockwise, holes clockwise.
+                for (x0, y0, x1, y1) in oriented_edges(contour, number == 0) {
                     out.contour_edges.extend([x0, y0, x1, y1]);
                     out.contour_edge_operations.push(operation);
                 }
@@ -604,9 +607,7 @@ impl Builder {
         out.cut_indices = found.indices;
         let tolerance = (self.tolerance_nm / NM_PER_MM) as f32;
         for (index, record) in adds.as_chunks::<SHAPE_WORDS>().0.iter().enumerate() {
-            let points = outline(record, tolerance);
-            for (position, &(x0, y0)) in points.iter().enumerate() {
-                let (x1, y1) = points[(position + 1) % points.len()];
+            for (x0, y0, x1, y1) in oriented_edges(&outline(record, tolerance), true) {
                 out.outline_edges.extend([x0, y0, x1, y1]);
                 out.outline_shapes.push(index as u32);
             }
@@ -635,6 +636,29 @@ impl Builder {
         }
         out
     }
+}
+
+/// A closed polygon's edges, turning counter-clockwise (x right, y up as
+/// written) when `counter_clockwise`, else clockwise.
+fn oriented_edges(points: &[(f32, f32)], counter_clockwise: bool) -> Vec<(f32, f32, f32, f32)> {
+    let n = points.len();
+    let area: f32 = (0..n)
+        .map(|i| {
+            let (a, b) = (points[i], points[(i + 1) % n]);
+            a.0 * b.1 - b.0 * a.1
+        })
+        .sum();
+    let forward = (area > 0.0) == counter_clockwise;
+    (0..n)
+        .map(|i| {
+            let (a, b) = (points[i], points[(i + 1) % n]);
+            if forward {
+                (a.0, a.1, b.0, b.1)
+            } else {
+                (b.0, b.1, a.0, a.1)
+            }
+        })
+        .collect()
 }
 
 /// Whether the hole crosses the slice at `order`, given each slice key's

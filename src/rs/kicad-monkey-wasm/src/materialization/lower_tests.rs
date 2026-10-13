@@ -102,6 +102,13 @@ fn assert_hole_cuts(front: &LoweredSlice, subtracts: usize, edges: usize) {
     }
 }
 
+/// Edges run with the material on their left: the zone's outer contour
+/// counter-clockwise, its hole clockwise (the fixture's square hole).
+fn assert_material_on_the_left(edges: &[[f32; 4]]) {
+    let signed: f32 = edges.iter().map(|e| e[0] * e[3] - e[2] * e[1]).sum();
+    assert!(signed > 0.0, "outer contours outweigh holes: {signed}");
+}
+
 #[test]
 fn copper_lowers_to_analytic_records_with_holes_as_subtracts() {
     let pack = pack();
@@ -146,6 +153,7 @@ fn copper_lowers_to_analytic_records_with_holes_as_subtracts() {
     assert_tiled_batches(&front);
     // Each contour closes: the edges' starts are their ends.
     let edges = front.contour_edges.as_chunks::<4>().0;
+    assert_material_on_the_left(edges);
     // Each edge names its region's operation: the zone's two fills, adding.
     assert_eq!(front.contour_edge_operations.len(), edges.len());
     assert!(
