@@ -14,6 +14,7 @@
 //! down. A hole whose span crosses the slice is lowered as a subtract.
 
 use super::cuts::{cuts, record_bounds};
+use super::outlines::outline;
 use super::tiles::{TILE_MM, tile_region};
 use kicad_monkey_contracts::generated::materialization_document::{
     Affine2D, Contour, HoleOperation, MaterialAction, MaterialOperation, NmBounds, NmPoint,
@@ -90,6 +91,11 @@ pub struct LoweredSlice {
     pub shape_cuts: Vec<u32>,
     pub edge_cuts: Vec<u32>,
     pub cut_indices: Vec<u32>,
+    /// The add shapes' outlines as closed edges (x0, y0, x1, y1), each
+    /// enclosing its shape within the tolerance (see `outlines`), and per edge
+    /// its add shape's index among the adds.
+    pub outline_edges: Vec<f32>,
+    pub outline_shapes: Vec<u32>,
     pub stats: LowerStats,
 }
 
@@ -596,6 +602,15 @@ impl Builder {
         out.shape_cuts = found.ranges[..shape_count * 2].to_vec();
         out.edge_cuts = found.ranges[shape_count * 2..].to_vec();
         out.cut_indices = found.indices;
+        let tolerance = (self.tolerance_nm / NM_PER_MM) as f32;
+        for (index, record) in adds.as_chunks::<SHAPE_WORDS>().0.iter().enumerate() {
+            let points = outline(record, tolerance);
+            for (position, &(x0, y0)) in points.iter().enumerate() {
+                let (x1, y1) = points[(position + 1) % points.len()];
+                out.outline_edges.extend([x0, y0, x1, y1]);
+                out.outline_shapes.push(index as u32);
+            }
+        }
         for (subtract, members) in batch_regions(&self.regions) {
             let first_vertex = out.fan_vertices.len() / 2;
             let first_cover = out.covers.len() / COVER_WORDS;

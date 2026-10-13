@@ -4,6 +4,7 @@
 pub mod barrels;
 pub mod cuts;
 pub mod lower;
+pub mod outlines;
 pub mod tiles;
 
 use kicad_monkey_contracts::generated::materialization_document::{
@@ -259,6 +260,18 @@ impl LoweredSliceRecords {
     #[wasm_bindgen(js_name = edgeCuts)]
     pub fn edge_cuts(&self) -> Vec<u32> {
         self.inner.edge_cuts.clone()
+    }
+
+    /// The add shapes' outline edges, (x0, y0, x1, y1) board millimetres each.
+    #[wasm_bindgen(js_name = outlineEdges)]
+    pub fn outline_edges(&self) -> Vec<f32> {
+        self.inner.outline_edges.clone()
+    }
+
+    /// Per outline edge, its add shape's index among the adds.
+    #[wasm_bindgen(js_name = outlineShapes)]
+    pub fn outline_shapes(&self) -> Vec<u32> {
+        self.inner.outline_shapes.clone()
     }
 
     /// The hole shape records the ranges name.
