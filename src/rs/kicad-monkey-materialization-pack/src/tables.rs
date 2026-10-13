@@ -1,9 +1,11 @@
 //! The binding table and the chunk directory as column sections.
 //!
-//! Binding section, for `n` entries: `u32 n`, then `u32` operation index,
-//! `i32` source UID, refdes, pad number (string indices, `-1` for none),
-//! `i32` net (net table index, `-1` for none), each `× n`, then `u8` source
-//! kind `× n`, padded to 8.
+//! Binding section, for `n` entries and `k` tied-net references: `u32 n`,
+//! `u32 k`, then `u32` operation index, `i32` source UID, refdes, pad number
+//! (string indices, `-1` for none), `i32` net (net table index, `-1` for
+//! none), `i32` die length (`-1` for none), each `× n`, `u32` tied-net start
+//! `× (n + 1)`, `i32` tied nets `× k`, `f64` die delay `× n` (NaN for none,
+//! which JSON cannot hold), then `u8` source kind `× n`, padded to 8.
 //!
 //! Chunk directory section, for `m` chunks and `k` net references: `u32 m`,
 //! `u32 k`, then `i32` slice (stack index), tile X, tile Y, each `× m`,
@@ -12,10 +14,15 @@
 
 use crate::PackError;
 use crate::wire::{
-    Cursor, StringTable, corrupt, count_u32, optional_string, pad8, put_i32, put_u32, string,
+    Cursor, StringTable, corrupt, count_u32, optional_string, pad8, put_f64, put_i32, put_u32,
+    string,
 };
+
+fn length_i32(value: i64) -> Result<i32, PackError> {
+    i32::try_from(value).map_err(|_| corrupt("length outside int32"))
+}
 use kicad_monkey_contracts::generated::materialization_document::{
-    BindingEntry, BindingSourceKind, ChunkEntry, Nm, NmBounds,
+    BindingEntry, BindingSourceKind, ChunkEntry, Nm, NmBounds, NonNegativeNm,
 };
 use std::collections::HashMap;
 
@@ -82,8 +89,16 @@ pub(crate) fn encode_binding(
     strings: &StringTable<'_>,
     keys: &Keys<'_>,
 ) -> Result<Vec<u8>, PackError> {
+    let tied: Vec<i32> = binding
+        .iter()
+        .flat_map(|entry| entry.tied_net_keys.iter())
+        .map(|key| keys.net(Some(key)))
+        .collect::<Result<_, _>>()?;
     let mut out = Vec::new();
-    put_u32(&mut out, &[count_u32(binding.len())?]);
+    put_u32(
+        &mut out,
+        &[count_u32(binding.len())?, count_u32(tied.len())?],
+    );
     let indices: Vec<u32> = binding.iter().map(|entry| entry.operation_index).collect();
     put_u32(&mut out, &indices);
     let column = |value: &dyn Fn(&BindingEntry) -> Option<&str>| {
@@ -100,6 +115,28 @@ pub(crate) fn encode_binding(
         .map(|entry| keys.net(entry.net_key.as_deref()))
         .collect::<Result<Vec<_>, _>>()?;
     put_i32(&mut out, &nets);
+    let lengths: Vec<i32> = binding
+        .iter()
+        .map(|entry| {
+            entry
+                .die_length_nm
+                .as_ref()
+                .map_or(Ok(-1), |nm| length_i32(**nm))
+        })
+        .collect::<Result<_, _>>()?;
+    put_i32(&mut out, &lengths);
+    let mut starts = vec![0u32];
+    for entry in binding {
+        let last = *starts.last().unwrap_or(&0);
+        starts.push(last + count_u32(entry.tied_net_keys.len())?);
+    }
+    put_u32(&mut out, &starts);
+    put_i32(&mut out, &tied);
+    let delays: Vec<f64> = binding
+        .iter()
+        .map(|entry| entry.die_delay_ps.unwrap_or(f64::NAN))
+        .collect();
+    put_f64(&mut out, &delays);
     for entry in binding {
         let kind = SOURCE_KINDS
             .iter()
@@ -118,7 +155,12 @@ pub(crate) fn decode_binding(
 ) -> Result<Vec<BindingEntry>, PackError> {
     let mut cursor = Cursor::new(section);
     let count = cursor.usize32()?;
-    if count.saturating_mul(21) > cursor.remaining() {
+    let tied_count = cursor.usize32()?;
+    let needed = count
+        .checked_mul(37)
+        .and_then(|bytes| bytes.checked_add(tied_count.checked_mul(4)?.checked_add(4)?))
+        .ok_or(PackError::Truncated)?;
+    if needed > cursor.remaining() {
         return Err(PackError::Truncated);
     }
     let indices = cursor.u32s(count)?;
@@ -126,10 +168,29 @@ pub(crate) fn decode_binding(
     let refdes = cursor.i32s(count)?;
     let pads = cursor.i32s(count)?;
     let net_indices = cursor.i32s(count)?;
+    let lengths = cursor.i32s(count)?;
+    let starts = cursor.u32s(count + 1)?;
+    let tied = cursor.i32s(tied_count)?;
+    let delays = cursor.f64s(count)?;
     let kinds = cursor.take(count)?;
     (0..count)
         .map(|row| {
+            let span = |value: u32| usize::try_from(value).map_err(|_| corrupt("tied start"));
+            let tied_net_keys = tied
+                .get(span(starts[row])?..span(starts[row + 1])?)
+                .ok_or(corrupt("tied nets out of range"))?
+                .iter()
+                .map(|index| string(nets, *index, "tied net out of range"))
+                .collect::<Result<Vec<_>, _>>()?;
+            let die_length_nm = match lengths[row] {
+                -1 => None,
+                value if value >= 0 => Some(NonNegativeNm(i64::from(value))),
+                _ => return Err(corrupt("bad die length")),
+            };
             Ok(BindingEntry {
+                tied_net_keys,
+                die_length_nm,
+                die_delay_ps: Some(delays[row]).filter(|delay| !delay.is_nan()),
                 operation_index: indices[row],
                 source_kind: *SOURCE_KINDS
                     .get(usize::from(kinds[row]))

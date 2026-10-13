@@ -27,7 +27,7 @@ use crate::wire::{
 };
 use kicad_monkey_contracts::generated::materialization_document::{
     Affine2D, Backdrill, HoleOperation, HolePlating, MaterialAction, MaterialOperation, Nm,
-    NmBounds, SurfaceMaterial, SurfaceOperation,
+    NmBounds, PostMachining, SurfaceMaterial, SurfaceOperation,
 };
 
 /// Fixed bytes per operation across every column but the parameters.
@@ -156,7 +156,9 @@ impl Columns {
             hole.plating_thickness_nm.as_ref(),
             hole.protection.as_ref(),
             &backdrills,
-        )
+        )?;
+        self.params
+            .hole_machining(&hole.post_machining, hole.castellated)
     }
 }
 
@@ -337,6 +339,7 @@ impl<'a> Block<'a> {
             }),
             2 | 3 => {
                 let details = reader.hole_details()?;
+                let machining = reader.hole_machining()?;
                 let row = HoleRow {
                     index,
                     plated: kind == 2,
@@ -346,7 +349,7 @@ impl<'a> Block<'a> {
                     affine,
                     bounds,
                 };
-                hole(details, names, row)?
+                hole(details, machining, names, row)?
             }
             _ => return Err(corrupt("unknown operation kind")),
         };
@@ -387,6 +390,7 @@ struct HoleRow {
 
 fn hole(
     details: HoleDetails,
+    (post_machining, castellated): (Vec<PostMachining>, Option<bool>),
     names: &Names<'_>,
     row: HoleRow,
 ) -> Result<MaterialOperation, PackError> {
@@ -417,6 +421,8 @@ fn hole(
         plating_thickness_nm: details.plating_thickness,
         protection: details.protection,
         backdrills,
+        post_machining,
+        castellated,
         bounds: row.bounds,
     }))
 }

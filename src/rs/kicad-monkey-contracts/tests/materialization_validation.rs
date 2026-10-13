@@ -1,7 +1,7 @@
 //! Review batch 4 evidence: the a0 validator enforces schema ranges and
 //! lengths, slice roles, the canonical scope, scope membership, chunk order,
 //! tiles, and nets, and bounds that hold their shape; the header check holds
-//! without operations.
+//! without operations. Slice 4 adds stack regions.
 
 use kicad_monkey_contracts::generated::materialization_document::MaterializationDocumentA0;
 use kicad_monkey_contracts::materialization_contract::{
@@ -10,6 +10,9 @@ use kicad_monkey_contracts::materialization_contract::{
 use serde_json::{Value, json};
 
 const TILE: i64 = 10_000_000;
+
+/// One edit of the base document.
+type Edit = Box<dyn Fn(&mut Value)>;
 
 fn affine(tx: i64, ty: i64) -> Value {
     json!({ "m11": 1.0, "m12": 0.0, "m21": 0.0, "m22": 1.0, "tx_nm": tx, "ty_nm": ty })
@@ -38,11 +41,15 @@ fn base() -> Value {
             { "key": "copper.front", "role": "conductor", "order": 1, "thickness_nm": 35_000 },
             { "key": "dielectric.1", "role": "dielectric", "order": 2, "thickness_nm": 1_500_000 },
             { "key": "copper.back", "role": "conductor", "order": 3 }
-        ], "board_thickness_nm": 1_600_000 },
+        ], "regions": [ { "key": "rigid", "kind": "rigid",
+                          "slice_keys": ["mask.front", "copper.front", "dielectric.1",
+                                         "copper.back"], "bend_lines": [] } ],
+        "board_thickness_nm": 1_600_000, "impedance_controlled": false },
         "nets": [ { "key": "GND", "name": "GND" }, { "key": "VCC", "name": "VCC" } ],
         "net_classes": [], "diff_pairs": [],
         "components": [ { "refdes": "U1", "footprint": "Demo:U", "side": "front",
-                          "affine": affine(1_000_000, 1_000_000), "source_uid": "fp-u1" } ],
+                          "affine": affine(1_000_000, 1_000_000), "source_uid": "fp-u1",
+                          "net_tie_groups": [], "jumper_groups": [] } ],
         "operations": [
             { "kind": "surface", "index": 0, "action": "subtract", "material": "solder_mask",
               "slice_key": "mask.front",
@@ -60,6 +67,7 @@ fn base() -> Value {
             { "kind": "hole", "index": 2, "plating": "plated",
               "start_slice_key": "copper.front", "end_slice_key": "copper.back",
               "net_key": "GND", "plating_thickness_nm": 25_000, "backdrills": [],
+              "post_machining": [],
               "shape": { "kind": "disk_2d", "center_nm": [0, 0], "radius_nm": 200_000 },
               "affine": affine(3_000_000, 1_000_000),
               "bounds": bounds(2_800_000, 800_000, 3_200_000, 1_200_000) },
@@ -290,4 +298,151 @@ fn the_header_check_needs_no_operations() {
     unknown["chunks"][0]["slice_key"] = json!("paste.front");
     let error = validate_materialization_header(&decode(unknown)).expect_err("unknown slice");
     assert_eq!(error.code, "unknown_slice");
+}
+
+#[test]
+fn stack_regions_cover_every_slice_in_stack_order() {
+    let region = |value: &mut Value| value["stack"]["regions"][0].clone();
+    let cases: [(&str, Edit); 7] = [
+        (
+            "missing_stack_region",
+            Box::new(|v| v["stack"]["regions"] = json!([])),
+        ),
+        (
+            "invalid_region_slices",
+            Box::new(|v| {
+                v["stack"]["regions"][0]["slice_keys"] = json!(["copper.front", "mask.front"]);
+            }),
+        ),
+        (
+            "invalid_region_slices",
+            Box::new(|v| {
+                v["stack"]["regions"][0]["slice_keys"][0] = json!("no.such.slice");
+            }),
+        ),
+        (
+            "uncovered_slice",
+            Box::new(|v| {
+                v["stack"]["regions"][0]["slice_keys"] = json!(["copper.front", "copper.back"]);
+            }),
+        ),
+        (
+            "duplicate_stack_region",
+            Box::new(move |v| {
+                let copy = region(v);
+                v["stack"]["regions"]
+                    .as_array_mut()
+                    .expect("regions")
+                    .push(copy);
+            }),
+        ),
+        (
+            "missing_region_boundary",
+            Box::new(move |v| {
+                let mut copy = region(v);
+                copy["key"] = json!("flex");
+                v["stack"]["regions"]
+                    .as_array_mut()
+                    .expect("regions")
+                    .push(copy);
+            }),
+        ),
+        (
+            "rigid_region_bends",
+            Box::new(|v| {
+                v["stack"]["regions"][0]["bend_lines"] = json!([{ "start_nm": [0, 0],
+                "end_nm": [1, 0], "radius_nm": 100, "angle_deg": 90.0 }]);
+            }),
+        ),
+    ];
+    for (expected, edit) in cases {
+        assert_eq!(code_after(|value| edit(value)), Some(expected));
+    }
+    // A flexible region may bend.
+    assert_eq!(
+        code_after(|v| {
+            v["stack"]["regions"][0]["kind"] = json!("flex");
+            v["stack"]["regions"][0]["bend_lines"] = json!([{ "start_nm": [0, 0],
+                "end_nm": [1, 0], "radius_nm": 100, "angle_deg": 90.0 }]);
+        }),
+        None
+    );
+}
+
+#[test]
+fn slice_four_records_are_checked() {
+    let class =
+        |name: &str, constituents: Value| json!({ "name": name, "constituents": constituents });
+    let cases: Vec<(&str, Edit)> = vec![
+        (
+            "invalid_net_class_constituents",
+            Box::new(move |v| {
+                v["net_classes"] = json!([class("HS,Default", json!(["HS"]))]);
+            }),
+        ),
+        (
+            "duplicate_net_class",
+            Box::new(move |v| {
+                v["net_classes"] = json!([class("HS", json!(["HS"])), class("HS", json!(["HS"]))]);
+            }),
+        ),
+        (
+            "invalid_tied_nets",
+            Box::new(|v| {
+                v["binding"][0]["tied_net_keys"] = json!(["VCC", "GND"]);
+            }),
+        ),
+        (
+            "invalid_tied_nets",
+            Box::new(|v| {
+                v["binding"][0]["tied_net_keys"] = json!(["NOPE"]);
+            }),
+        ),
+        (
+            "invalid_length",
+            Box::new(|v| v["binding"][0]["die_length_nm"] = json!(-5)),
+        ),
+        (
+            "invalid_die_delay",
+            Box::new(|v| v["binding"][0]["die_delay_ps"] = json!(-1.0)),
+        ),
+        (
+            "invalid_pad_group",
+            Box::new(|v| {
+                v["components"][0]["jumper_groups"] = json!([{ "pad_numbers": ["1", "1"] }]);
+            }),
+        ),
+        (
+            "invalid_post_machining",
+            Box::new(|v| {
+                v["operations"][2]["post_machining"] = json!([{ "side": "front",
+                "mode": "counterbore", "diameter_nm": 600_000, "angle_deg": 90.0 }]);
+            }),
+        ),
+        (
+            "invalid_post_machining",
+            Box::new(|v| {
+                let entry = json!({ "side": "back", "mode": "countersink", "angle_deg": 90.0 });
+                v["operations"][2]["post_machining"] = json!([entry.clone(), entry]);
+            }),
+        ),
+    ];
+    for (expected, edit) in cases {
+        assert_eq!(code_after(|value| edit(value)), Some(expected));
+    }
+    // A valid composite class, tied nets, pin facts, groups, and machining.
+    assert_eq!(
+        code_after(|v| {
+            v["net_classes"] = json!([class("HS,Default", json!(["HS", "Default"]))]);
+            v["nets"][0]["net_class"] = json!("HS,Default");
+            v["binding"][0]["tied_net_keys"] = json!(["GND", "VCC"]);
+            v["binding"][0]["die_length_nm"] = json!(1_200_000);
+            v["binding"][0]["die_delay_ps"] = json!(12.5);
+            v["components"][0]["net_tie_groups"] = json!([{ "pad_numbers": ["1", "2"] }]);
+            v["operations"][2]["post_machining"] = json!([{ "side": "front",
+                "mode": "countersink", "diameter_nm": 600_000, "angle_deg": 90.0 }]);
+            v["operations"][2]["castellated"] = json!(true);
+        }),
+        None
+    );
 }

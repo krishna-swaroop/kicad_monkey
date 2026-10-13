@@ -15,8 +15,22 @@ export type Nm = number;
  * Non-negative length in integer nanometres.
  */
 export type NonNegativeNm = number;
-export type SliceRole = "conductor" | "dielectric" | "solder_mask" | "paste" | "silkscreen";
+/**
+ * Physical role of a slice. `coverlay`, `adhesive`, and `stiffener` occur
+ * only in flexible or stiffened stack regions.
+ */
+export type SliceRole =
+  "conductor" | "dielectric" | "solder_mask" | "paste" | "silkscreen" | "coverlay" | "adhesive" | "stiffener";
 export type BoardSide = "front" | "back";
+export type StackRegionKind = "rigid" | "flex";
+/**
+ * Point in KiCad's board frame: X to the right, Y down, in nanometres.
+ *
+ * @minItems 2
+ * @maxItems 2
+ */
+export type NmPoint = [Nm, Nm];
+export type PathSegment = LineSegment | ArcSegment | CubicSegment;
 export type MaterialOperation = SurfaceOperation | HoleOperation;
 export type MaterialAction = "add" | "subtract";
 export type SurfaceMaterial = "copper" | "dielectric" | "solder_mask" | "paste" | "silkscreen";
@@ -33,15 +47,7 @@ export type Shape2D =
   | Annulus2D
   | SweptPath2D
   | PlanarRegion2D;
-/**
- * Point in KiCad's board frame: X to the right, Y down, in nanometres.
- *
- * @minItems 2
- * @maxItems 2
- */
-export type NmPoint = [Nm, Nm];
 export type RectCorner = "top_left" | "top_right" | "bottom_left" | "bottom_right";
-export type PathSegment = LineSegment | ArcSegment | CubicSegment;
 export type PathCap = "round" | "flat";
 export type PathJoin = "round" | "miter";
 export type HolePlating = "plated" | "unplated";
@@ -49,6 +55,7 @@ export type HolePlating = "plated" | "unplated";
  * KiCad's tri-state for a protection option: set, cleared, or left to the board default.
  */
 export type ProtectionState = "yes" | "no" | "unspecified";
+export type PostMachiningMode = "counterbore" | "countersink";
 export type BindingSourceKind =
   | "track"
   | "track_arc"
@@ -89,9 +96,15 @@ export interface MaterializationProducer {
   name: string;
   version: string;
 }
+/**
+ * The board file, and the project file when one was given: net classes come
+ * only from the project.
+ */
 export interface MaterializationSource {
   sha256: string;
   source_bytes: string;
+  project_sha256?: string;
+  project_bytes?: string;
 }
 export interface MaterializationCoordinateSystem {
   unit: "nm";
@@ -133,8 +146,21 @@ export interface NmBounds {
 }
 export interface Stack {
   slices: StackSlice[];
+  /**
+   * @minItems 1
+   */
+  regions: [StackRegion, ...StackRegion[]];
   board_thickness_nm?: NonNegativeNm;
   copper_finish?: string;
+  /**
+   * KiCad's board-level impedance-control flag (`dielectric_constraints`).
+   */
+  impedance_controlled?: boolean;
+  /**
+   * KiCad's board-level plated-edge flag (`edge_plating`). KiCad stores no
+   * plated-edge geometry; fabrication plates the profile.
+   */
+  edge_plating?: boolean;
 }
 /**
  * One physical slice of the rigid board stack. `order` is zero at the front
@@ -154,6 +180,76 @@ export interface StackSlice {
   loss_tangent?: number;
 }
 /**
+ * Part of the board with its own build-up. `slice_keys` lists the slices
+ * present there in stack order. A slice that only one region lists exists
+ * only in that region. Without `boundary` the region is the whole board
+ * profile. A rigid board has exactly one rigid region holding every slice.
+ */
+export interface StackRegion {
+  key: string;
+  kind: StackRegionKind;
+  /**
+   * @minItems 1
+   */
+  slice_keys: [string, ...string[]];
+  boundary?: PlanarRegion2D[];
+  bend_lines: BendLine[];
+}
+/**
+ * One analytic outer contour with optional hole contours.
+ */
+export interface PlanarRegion2D {
+  kind: "planar_region_2d";
+  outer: Contour;
+  holes: Contour[];
+}
+/**
+ * Closed contour of line, arc, and cubic segments starting at `start_nm`.
+ * When the last segment does not end at `start_nm`, a straight closing
+ * segment back to it is implied.
+ */
+export interface Contour {
+  start_nm: NmPoint;
+  /**
+   * @minItems 1
+   */
+  segments: [PathSegment, ...PathSegment[]];
+}
+/**
+ * Straight path segment to `end_nm`.
+ */
+export interface LineSegment {
+  kind: "line";
+  end_nm: NmPoint;
+}
+/**
+ * Circular arc segment through `mid_nm` to `end_nm`, the form KiCad stores.
+ */
+export interface ArcSegment {
+  kind: "arc";
+  mid_nm: NmPoint;
+  end_nm: NmPoint;
+}
+/**
+ * Cubic Bézier segment from the previous point through two control points
+ * to `end_nm`, the form KiCad stores for curves.
+ */
+export interface CubicSegment {
+  kind: "cubic";
+  control1_nm: NmPoint;
+  control2_nm: NmPoint;
+  end_nm: NmPoint;
+}
+/**
+ * Fold line of a flexible region, for 3D views; flat analyses ignore it.
+ */
+export interface BendLine {
+  start_nm: NmPoint;
+  end_nm: NmPoint;
+  radius_nm: NonNegativeNm;
+  angle_deg: number;
+}
+/**
  * Resolved electrical net. The empty key is the no-net assignment.
  */
 export interface Net {
@@ -162,17 +258,33 @@ export interface Net {
   net_class?: string;
 }
 /**
- * Design rules of one KiCad net class, as the project defines them.
+ * Effective design rules of a KiCad net class. A net matched by several
+ * classes gets a composite class: `constituents` are the matched classes by
+ * priority, with `Default` last when it supplied a value, `name` joins them
+ * with commas, and each rule comes from the first constituent that sets it.
+ * A single class lists only itself.
  */
 export interface NetClass {
   name: string;
+  /**
+   * @minItems 1
+   */
+  constituents: [string, ...string[]];
   track_width_nm?: NonNegativeNm;
   clearance_nm?: NonNegativeNm;
   diff_pair_width_nm?: NonNegativeNm;
   diff_pair_gap_nm?: NonNegativeNm;
+  diff_pair_via_gap_nm?: NonNegativeNm;
   via_diameter_nm?: NonNegativeNm;
   via_drill_nm?: NonNegativeNm;
+  microvia_diameter_nm?: NonNegativeNm;
+  microvia_drill_nm?: NonNegativeNm;
 }
+/**
+ * Two nets paired by KiCad's suffix rule: after any trailing digits and
+ * underscores, `+` or `P` marks the positive net and `-` or `N` the
+ * negative one, and both nets exist.
+ */
 export interface DiffPair {
   base_name: string;
   positive_net_key: string;
@@ -186,6 +298,14 @@ export interface Component {
   source_uid: string;
   body_bounds?: NmBounds1;
   body_height_nm?: NonNegativeNm;
+  /**
+   * Net-tie pad groups: copper in the footprint may join these pads' nets.
+   */
+  net_tie_groups: PadGroup[];
+  /**
+   * Jumper pad groups, connected inside the part without board copper.
+   */
+  jumper_groups: PadGroup[];
 }
 /**
  * One fully composed local-to-board transform. A shape's local coordinates
@@ -209,6 +329,15 @@ export interface NmBounds1 {
   min_y_nm: Nm;
   max_x_nm: Nm;
   max_y_nm: Nm;
+}
+/**
+ * Pad numbers of one footprint that KiCad connects as a group.
+ */
+export interface PadGroup {
+  /**
+   * @minItems 1
+   */
+  pad_numbers: [string, ...string[]];
 }
 /**
  * Add or remove one shape of material on one slice whose role matches the
@@ -314,51 +443,6 @@ export interface SweptPath2D {
   join: PathJoin;
 }
 /**
- * Straight path segment to `end_nm`.
- */
-export interface LineSegment {
-  kind: "line";
-  end_nm: NmPoint;
-}
-/**
- * Circular arc segment through `mid_nm` to `end_nm`, the form KiCad stores.
- */
-export interface ArcSegment {
-  kind: "arc";
-  mid_nm: NmPoint;
-  end_nm: NmPoint;
-}
-/**
- * Cubic Bézier segment from the previous point through two control points
- * to `end_nm`, the form KiCad stores for curves.
- */
-export interface CubicSegment {
-  kind: "cubic";
-  control1_nm: NmPoint;
-  control2_nm: NmPoint;
-  end_nm: NmPoint;
-}
-/**
- * One analytic outer contour with optional hole contours.
- */
-export interface PlanarRegion2D {
-  kind: "planar_region_2d";
-  outer: Contour;
-  holes: Contour[];
-}
-/**
- * Closed contour of line, arc, and cubic segments starting at `start_nm`.
- * When the last segment does not end at `start_nm`, a straight closing
- * segment back to it is implied.
- */
-export interface Contour {
-  start_nm: NmPoint;
-  /**
-   * @minItems 1
-   */
-  segments: [PathSegment, ...PathSegment[]];
-}
-/**
  * Axis-aligned bounds in the board frame, inclusive.
  */
 export interface NmBounds2 {
@@ -383,6 +467,11 @@ export interface HoleOperation {
   plating_thickness_nm?: NonNegativeNm;
   protection?: HoleProtection;
   backdrills: Backdrill[];
+  post_machining: PostMachining[];
+  /**
+   * The hole belongs to a castellated pad, cut by the board edge in fabrication.
+   */
+  castellated?: boolean;
   bounds: NmBounds;
 }
 export interface HoleProtection {
@@ -405,6 +494,18 @@ export interface Backdrill {
   until_slice_key?: string;
 }
 /**
+ * Counterbore or countersink machined from one side. A countersink's
+ * `angle_deg` is the full included cone angle. Without `depth_nm`, a
+ * countersink runs to its cone apex.
+ */
+export interface PostMachining {
+  side: BoardSide;
+  mode: PostMachiningMode;
+  diameter_nm?: NonNegativeNm;
+  depth_nm?: NonNegativeNm;
+  angle_deg?: number;
+}
+/**
  * Links one operation to the KiCad object that produced it. Required for
  * simulation and picking; geometry consumers may ignore it.
  */
@@ -415,6 +516,19 @@ export interface BindingEntry {
   refdes?: string;
   pad_number?: string;
   net_key?: string;
+  /**
+   * Nets a net-tie bridge joins: the nets of the net-tie pads its copper
+   * touches. The nets stay separate; consumers decide whether to join them.
+   */
+  tied_net_keys?: string[];
+  /**
+   * Non-negative length in integer nanometres.
+   */
+  die_length_nm?: number;
+  /**
+   * Pad-to-die delay of the pad's pin, in picoseconds.
+   */
+  die_delay_ps?: number;
 }
 /**
  * Operations of one (slice, tile) occupy a contiguous index range. An

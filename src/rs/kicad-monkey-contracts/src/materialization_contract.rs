@@ -23,8 +23,10 @@
 //! decoder parses to a `Value` first, which does.
 
 mod chunking;
+mod records;
 mod scope;
 mod shapes;
+mod stack;
 
 use crate::generated::materialization_document::{
     Affine2D, ChunkEntry, HoleOperation, HolePlating, MaterialOperation, MaterialProduct,
@@ -183,11 +185,14 @@ fn validate_header(document: &MaterializationDocumentA0) -> Result<Keys<'_>, Val
     validate_identity(document)?;
     validate_scope(&document.scope)?;
     let keys = collect_keys(document)?;
+    stack::validate_regions(&document.stack, &keys)?;
     validate_nets(document, &keys)?;
+    records::validate_net_classes(document)?;
     validate_components(document)?;
     validate_diagnostics(document)?;
     let total = validate_chunk_directory(document, &keys)?;
     validate_binding_order(document, total)?;
+    records::validate_binding_records(document, &keys)?;
     Ok(keys)
 }
 
@@ -394,6 +399,7 @@ fn validate_components(document: &MaterializationDocumentA0) -> Result<(), Valid
             component.body_height_nm.as_ref(),
             &format!("{path}.body_height_nm"),
         )?;
+        records::validate_pad_groups(component, &path)?;
     }
     Ok(())
 }
@@ -599,6 +605,7 @@ fn validate_hole(hole: &HoleOperation, keys: &Keys<'_>, path: &str) -> Result<()
             )?;
         }
     }
+    records::validate_post_machining(hole, path)?;
     if !matches!(
         hole.shape,
         Shape2d::Disk2d(_)

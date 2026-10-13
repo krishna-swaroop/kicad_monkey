@@ -7,12 +7,15 @@ use super::flash::{FlashLayers, flash_layers, presentation_plot};
 use super::geometry::footprint_affine;
 use super::holes::{HoleSpec, pad_hole, via_holes};
 use super::layers::board_stack;
+use super::machining::copper_knockouts;
+use super::net_classes::{NetClassSettings, assign_classes, diff_pairs};
+use super::net_ties::{NetTies, jumper_groups, net_tie_groups};
 use super::nets::{NetNames, net_table};
 use super::pads::{PadFrame, land, npth_without_copper, place_pad, reference};
 use super::parallel;
 use super::profile::close_profile;
 use super::routing::{route_copper, routes, via_lands, zone_fills};
-use super::source_graphics::copper_graphics;
+use super::source_graphics::{copper_graphics, outline_bounds};
 use super::stack::CopperStack;
 use super::technical::{
     FootprintTextFacts, SourceGraphics, TECHNICAL_LAYERS, TechnicalBoard, TextContext,
@@ -28,13 +31,15 @@ use crate::pcb::{
 };
 use crate::sexpr::Sexp;
 use kicad_monkey_contracts::generated::materialization_document::{
-    BoardSide, Component, MaterialProduct, Net, PlanarRegion2d, Stack,
+    BoardSide, Component, DiffPair, MaterialProduct, Net, NetClass, NmBounds, PlanarRegion2d, Stack,
 };
 
 /// Everything emitted from one board before chunking.
 pub(crate) struct Emitted {
     pub stack: Stack,
     pub nets: Vec<Net>,
+    pub net_classes: Vec<NetClass>,
+    pub diff_pairs: Vec<DiffPair>,
     pub components: Vec<Component>,
     pub emitter: Emitter,
 }
@@ -212,22 +217,46 @@ fn warn_footprint_transforms(view: &PcbView<'_>, emitter: &mut Emitter) {
     }
 }
 
-/// Emit `products` of the board in `source`, recording at most
-/// `operation_cap` operations when given.
+/// Emit `products` of the board in `source`, with net classes from
+/// `project` when given, recording at most `operation_cap` operations when
+/// given.
 pub(crate) fn emit_board(
     source: &str,
+    project: Option<&str>,
     products: &[MaterialProduct],
     operation_cap: Option<usize>,
 ) -> Result<Emitted, MaterializationError> {
+    let settings = project.map(NetClassSettings::from_project).transpose()?;
     let view =
         PcbView::parse_selected(source, Default::default(), selection()).map_err(parse_error)?;
-    emit_view(source, &view, products, operation_cap)
+    emit_view(source, settings, &view, products, operation_cap)
+}
+
+/// Give nets their classes and pair them. Classes come from the project
+/// and any board `(net_class)` forms.
+fn classify(
+    settings: Option<NetClassSettings>,
+    view: &PcbView<'_>,
+    nets: &mut [Net],
+    emitter: &mut Emitter,
+) -> (Vec<NetClass>, Vec<DiffPair>) {
+    emitter.product = None;
+    let settings = match settings {
+        Some(settings) => Some(settings.with_board_classes(view)),
+        None => NetClassSettings::from_board(view),
+    };
+    // Without either source, classes stay unknown: nets carry none.
+    let classes = settings.map_or_else(Vec::new, |settings| {
+        assign_classes(&settings, nets, emitter)
+    });
+    (classes, diff_pairs(nets))
 }
 
 /// Emit `products` from an already parsed `view` of `source`. Correctness
 /// rule 1: a projected view and a full-model view give the same result.
 fn emit_view(
     source: &str,
+    settings: Option<NetClassSettings>,
     view: &PcbView<'_>,
     products: &[MaterialProduct],
     operation_cap: Option<usize>,
@@ -252,11 +281,12 @@ fn emit_view(
     );
     let Decoded {
         sources,
-        nets,
+        mut nets,
         setup,
         stack,
         graphics,
     } = decoded?;
+    let (net_classes, diff_pairs) = classify(settings, view, &mut nets, &mut emitter);
     // Text of every drawn product comes from one plot document.
     let text = drawn.then(|| Text {
         context: text_context(source, view, &graphics.0),
@@ -277,13 +307,16 @@ fn emit_view(
     };
     emit_technical(&board, products, &mut emitter);
     let components = if wants(MaterialProduct::Components) {
-        sources.footprints.iter().map(component).collect()
+        let version = view.metadata().map_or(0, |metadata| metadata.version);
+        components(&sources, &graphics.1, version)
     } else {
         Vec::new()
     };
     Ok(Emitted {
         stack,
         nets,
+        net_classes,
+        diff_pairs,
         components,
         emitter,
     })
@@ -311,20 +344,28 @@ fn decode_and_emit_copper(
     let nets = nets(view, &sources)?;
     let setup = view.setup().map_err(parse_error)?;
     let stack = stack_of(view, setup.as_ref(), copper, emitter)?;
-    let graphics = if drawn {
+    // Components read footprint courtyards and fabrication outlines.
+    let graphics = if drawn || products.contains(&MaterialProduct::Components) {
         source_graphics(view)?
     } else {
         (Vec::new(), Vec::new())
     };
     if products.contains(&MaterialProduct::Copper) {
         emit_copper(view, &sources, copper, emitter)?;
+        // Hole problems are reported by the holes product.
+        let holes = hole_specs(&sources, copper, &mut Emitter::default());
+        emitter.product = Some(MaterialProduct::Copper);
+        copper_knockouts(&holes, &stack, emitter);
         let names = NetNames::new(&collect(view.nets())?, &nets);
+        let version = view.metadata().map_or(0, |metadata| metadata.version);
+        let ties = NetTies::new(&sources.footprints, &sources.pads, copper, version);
         copper_graphics(
             &graphics.0,
             &graphics.1,
             &sources.footprints,
             copper,
             &names,
+            &ties,
             emitter,
         );
     }
@@ -645,6 +686,48 @@ impl Pads<'_> {
     }
 }
 
+/// Component records, with each footprint's net-tie and jumper groups.
+fn components(sources: &Sources, graphics: &[PcbFootprintGraphic], version: i64) -> Vec<Component> {
+    let mut pads: Vec<Vec<&PcbPad>> = vec![Vec::new(); sources.footprints.len()];
+    for pad in &sources.pads {
+        if let Some(owned) = pads.get_mut(pad.footprint_index) {
+            owned.push(pad);
+        }
+    }
+    let mut drawings: Vec<Vec<&PcbGraphic>> = vec![Vec::new(); sources.footprints.len()];
+    for owned in graphics {
+        if let Some(list) = drawings.get_mut(owned.footprint_index) {
+            list.push(&owned.graphic);
+        }
+    }
+    sources
+        .footprints
+        .iter()
+        .zip(pads.iter().zip(&drawings))
+        .map(|(footprint, (owned, drawn))| {
+            let mut record = component(footprint);
+            record.body_bounds = body_bounds(footprint, drawn);
+            record.net_tie_groups = net_tie_groups(footprint, owned, version);
+            record.jumper_groups = jumper_groups(footprint, owned);
+            record
+        })
+        .collect()
+}
+
+/// Body extent in footprint-local coordinates: the courtyard on the
+/// footprint's side, else its fabrication outline. KiCad stores no body
+/// height, so that stays unknown.
+fn body_bounds(footprint: &PcbFootprint, drawn: &[&PcbGraphic]) -> Option<NmBounds> {
+    let back = footprint.layer.as_deref() == Some("B.Cu");
+    let (courtyard, fabrication) = if back {
+        ("B.CrtYd", "B.Fab")
+    } else {
+        ("F.CrtYd", "F.Fab")
+    };
+    outline_bounds(drawn.iter().copied(), courtyard)
+        .or_else(|| outline_bounds(drawn.iter().copied(), fabrication))
+}
+
 fn component(footprint: &PcbFootprint) -> Component {
     Component {
         refdes: reference(footprint),
@@ -662,6 +745,8 @@ fn component(footprint: &PcbFootprint) -> Component {
         ),
         body_bounds: None,
         body_height_nm: None,
+        net_tie_groups: Vec::new(),
+        jumper_groups: Vec::new(),
     }
 }
 

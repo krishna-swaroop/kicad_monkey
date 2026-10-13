@@ -36,7 +36,8 @@
             "$ref": "#/$defs/NonNegativeNm"
         },
         "max_source_bytes": {
-            "type": "string"
+            "type": "string",
+            "description": "Bounds the board and project files together."
         },
         "max_operations": {
             "type": "integer",

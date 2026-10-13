@@ -23,6 +23,10 @@ mod geometry;
 mod graphics;
 mod holes;
 mod layers;
+mod machining;
+mod net_classes;
+mod net_patterns;
+mod net_ties;
 mod nets;
 mod pads;
 mod parallel;
@@ -94,18 +98,27 @@ const IMPLEMENTED: [MaterialProduct; 7] = [
     MaterialProduct::Components,
 ];
 
-/// Identity of a source, recorded in every document made from it.
+/// Identity of the board and project files, recorded in every document
+/// made from them.
 struct SourceIdentity {
     sha256: String,
     bytes: usize,
+    project: Option<(String, usize)>,
 }
 
 impl SourceIdentity {
-    fn of(source: &str) -> Self {
+    fn of(source: &str, project: Option<&str>) -> Self {
         Self {
             sha256: sha256_hex(source.as_bytes()),
             bytes: source.len(),
+            project: project.map(|text| (sha256_hex(text.as_bytes()), text.len())),
         }
+    }
+
+    /// Bytes counted against `max_source_bytes`: board and project.
+    fn total_bytes(&self) -> usize {
+        self.bytes
+            .saturating_add(self.project.as_ref().map_or(0, |(_, bytes)| *bytes))
     }
 }
 
@@ -117,7 +130,18 @@ pub fn materialize_board(
     source: &str,
     request: &MaterializationRequestA0,
 ) -> Result<MaterializationDocumentA0, MaterializationError> {
-    validate_request(source.len(), request)?;
+    materialize_project(source, None, request)
+}
+
+/// [`materialize_board`] with the board's `.kicad_pro` project file, which
+/// supplies net classes. `max_source_bytes` bounds both files together.
+pub fn materialize_project(
+    source: &str,
+    project: Option<&str>,
+    request: &MaterializationRequestA0,
+) -> Result<MaterializationDocumentA0, MaterializationError> {
+    let identity = SourceIdentity::of(source, project);
+    validate_request(identity.total_bytes(), request)?;
     let scope = scope_from_request(request);
     let limit = operation_limit(request);
     // Products are pushed down into emission, so without slice, net, or
@@ -125,7 +149,12 @@ pub fn materialize_board(
     // stop as soon as it passes the limit.
     let unfiltered =
         scope.slice_keys.is_empty() && scope.net_keys.is_empty() && scope.region.is_none();
-    let emitted = producer::emit_board(source, &scope.products, unfiltered.then_some(limit))?;
+    let emitted = producer::emit_board(
+        source,
+        project,
+        &scope.products,
+        unfiltered.then_some(limit),
+    )?;
     if emitted.emitter.overflowed {
         return Err(too_many_operations(limit));
     }
@@ -136,7 +165,7 @@ pub fn materialize_board(
     } else {
         prepared::selected(&emitted, &scope)
     };
-    assemble(emitted, &SourceIdentity::of(source), &scope, request)
+    assemble(emitted, &identity, &scope, request)
 }
 
 fn operation_limit(request: &MaterializationRequestA0) -> usize {
@@ -179,6 +208,8 @@ fn assemble(
     let mut document = empty_document(identity, scope.clone(), diagnostics);
     document.stack = emitted.stack;
     document.nets = emitted.nets;
+    document.net_classes = emitted.net_classes;
+    document.diff_pairs = emitted.diff_pairs;
     document.components = emitted.components;
     document.binding = remap_binding(emitted.emitter.binding, &chunked.new_index_of_input);
     document.operations = chunked.operations;
@@ -303,6 +334,11 @@ fn empty_document(
         source: MaterializationSource {
             sha256: identity.sha256.clone(),
             source_bytes: identity.bytes.to_string(),
+            project_sha256: identity.project.as_ref().map(|(sha, _)| sha.clone()),
+            project_bytes: identity
+                .project
+                .as_ref()
+                .map(|(_, bytes)| bytes.to_string()),
         },
         coordinate_system: MaterializationCoordinateSystem {
             unit: "nm".to_owned(),
@@ -312,8 +348,11 @@ fn empty_document(
         scope,
         stack: Stack {
             slices: Vec::new(),
+            regions: Vec::new(),
             board_thickness_nm: None,
             copper_finish: None,
+            impedance_controlled: None,
+            edge_plating: None,
         },
         nets: Vec::new(),
         net_classes: Vec::new(),

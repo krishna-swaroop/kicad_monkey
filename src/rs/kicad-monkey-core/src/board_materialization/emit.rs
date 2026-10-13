@@ -8,8 +8,8 @@ use super::holes::HoleSpec;
 use kicad_monkey_contracts::generated::materialization_document::{
     Affine2D, Backdrill, BindingEntry, BindingSourceKind, DiagnosticSeverity, HoleOperation,
     HolePlating, HoleProtection, MaterialAction, MaterialOperation, MaterialProduct,
-    MaterializationDiagnostic, Nm, NmBounds, NonNegativeNm, Shape2d, SurfaceMaterial,
-    SurfaceOperation,
+    MaterializationDiagnostic, Nm, NmBounds, NonNegativeNm, PostMachining, Shape2d,
+    SurfaceMaterial, SurfaceOperation,
 };
 
 /// KiCad object an operation came from.
@@ -20,6 +20,11 @@ pub(crate) struct Origin {
     pub refdes: Option<String>,
     pub pad_number: Option<String>,
     pub net_key: String,
+    /// Pad-to-die length and delay of a pad's pin.
+    pub die_length_nm: Option<i64>,
+    pub die_delay_ps: Option<f64>,
+    /// Nets a net-tie bridge joins.
+    pub tied_net_keys: Vec<String>,
 }
 
 impl Origin {
@@ -30,6 +35,9 @@ impl Origin {
             refdes: None,
             pad_number: None,
             net_key,
+            die_length_nm: None,
+            die_delay_ps: None,
+            tied_net_keys: Vec::new(),
         }
     }
 }
@@ -43,6 +51,8 @@ pub(crate) struct HoleFacts {
     pub plating_thickness_nm: Option<i64>,
     pub protection: Option<HoleProtection>,
     pub backdrills: Vec<Backdrill>,
+    pub post_machining: Vec<PostMachining>,
+    pub castellated: Option<bool>,
 }
 
 /// Material, action, owning net, and cut group of a surface operation.
@@ -114,6 +124,9 @@ impl Emitter {
             refdes: origin.refdes.clone(),
             pad_number: origin.pad_number.clone(),
             net_key: net_key.map(str::to_owned),
+            tied_net_keys: origin.tied_net_keys.clone(),
+            die_length_nm: origin.die_length_nm.map(NonNegativeNm),
+            die_delay_ps: origin.die_delay_ps,
         });
     }
 
@@ -203,6 +216,8 @@ impl Emitter {
                 plating_thickness_nm: facts.plating_thickness_nm.map(NonNegativeNm),
                 protection: facts.protection,
                 backdrills: facts.backdrills,
+                post_machining: facts.post_machining,
+                castellated: facts.castellated,
                 bounds,
             }));
     }

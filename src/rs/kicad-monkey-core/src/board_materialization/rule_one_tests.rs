@@ -107,8 +107,9 @@ fn a_projected_view_and_a_full_model_view_give_the_same_result() {
         &[MaterialProduct::Copper][..],
         &[MaterialProduct::Silkscreen][..],
     ] {
-        let from_projection = emit_view(BOARD, &projected, products, None).expect("projected");
-        let from_full = emit_view(BOARD, &full, products, None).expect("full");
+        let from_projection =
+            emit_view(BOARD, None, &projected, products, None).expect("projected");
+        let from_full = emit_view(BOARD, None, &full, products, None).expect("full");
         assert!(
             !from_full.emitter.operations.is_empty(),
             "the board materializes something for {products:?}"

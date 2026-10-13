@@ -138,6 +138,12 @@ pub(crate) fn place_pad<'a>(
         refdes: Some(reference(footprint)),
         pad_number: Some(pad.number.clone()),
         net_key: net_key(&pad.net),
+        die_length_nm: pad
+            .die_length
+            .filter(|length| *length > 0.0)
+            .map(|length| i64::from(nm(length))),
+        die_delay_ps: pad.die_delay.filter(|delay| *delay > 0.0),
+        tied_net_keys: Vec::new(),
     };
     Some(PlacedPad {
         footprint,

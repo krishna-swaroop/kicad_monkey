@@ -4,8 +4,8 @@
 use crate::PackError;
 use kicad_monkey_contracts::generated::materialization_document::{
     ArcSegment, Backdrill, BoardSide, Contour, CubicSegment, HoleProtection, LineSegment, Nm,
-    NmPoint, NonNegativeNm, PathCap, PathJoin, PathSegment, ProtectionState, RectCorner, Shape2d,
-    SideProtection,
+    NmPoint, NonNegativeNm, PathCap, PathJoin, PathSegment, PostMachining, PostMachiningMode,
+    ProtectionState, RectCorner, Shape2d, SideProtection,
 };
 
 /// Path segment tags held by one parameter word.
@@ -230,6 +230,35 @@ impl ParamWriter {
             self.optional_length(drill.diameter_nm.as_ref())?;
             self.push(*until_slice);
         }
+        Ok(())
+    }
+
+    /// A hole's post-machining and castellation, after its details: the
+    /// count, then per entry the side, the mode, the optional diameter and
+    /// depth, and the angle as a presence flag and two words of its `f64`
+    /// bits; then the castellated tri-state (`-1` absent).
+    pub(crate) fn hole_machining(
+        &mut self,
+        machining: &[PostMachining],
+        castellated: Option<bool>,
+    ) -> Result<(), PackError> {
+        self.count(machining.len())?;
+        for entry in machining {
+            self.push(i32::from(entry.side == BoardSide::Back));
+            self.push(i32::from(entry.mode == PostMachiningMode::Countersink));
+            self.optional_length(entry.diameter_nm.as_ref())?;
+            self.optional_length(entry.depth_nm.as_ref())?;
+            match entry.angle_deg {
+                None => self.push(0),
+                Some(angle) => {
+                    let bits = angle.to_bits();
+                    self.push(1);
+                    self.push((bits >> 32) as u32 as i32);
+                    self.push(bits as u32 as i32);
+                }
+            }
+        }
+        self.push(castellated.map_or(-1, i32::from));
         Ok(())
     }
 }
@@ -503,6 +532,51 @@ impl<'a> ParamReader<'a> {
             protection,
             backdrills,
         })
+    }
+}
+
+impl ParamReader<'_> {
+    /// A hole's post-machining and castellation (see the writer).
+    pub(crate) fn hole_machining(
+        &mut self,
+    ) -> Result<(Vec<PostMachining>, Option<bool>), PackError> {
+        let count = self.count(5)?;
+        let mut machining = Vec::with_capacity(count);
+        for _ in 0..count {
+            let side = if self.flag()? {
+                BoardSide::Back
+            } else {
+                BoardSide::Front
+            };
+            let mode = if self.flag()? {
+                PostMachiningMode::Countersink
+            } else {
+                PostMachiningMode::Counterbore
+            };
+            let diameter_nm = self.optional_length()?;
+            let depth_nm = self.optional_length()?;
+            let angle_deg = if self.flag()? {
+                let high = u64::from(self.next()? as u32);
+                let low = u64::from(self.next()? as u32);
+                Some(f64::from_bits((high << 32) | low))
+            } else {
+                None
+            };
+            machining.push(PostMachining {
+                side,
+                mode,
+                diameter_nm,
+                depth_nm,
+                angle_deg,
+            });
+        }
+        let castellated = match self.next()? {
+            -1 => None,
+            0 => Some(false),
+            1 => Some(true),
+            _ => return Err(corrupt("bad castellated flag")),
+        };
+        Ok((machining, castellated))
     }
 }
 

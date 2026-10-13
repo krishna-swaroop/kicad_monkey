@@ -206,8 +206,8 @@
         <td>One fixed family selection. Slice 5 measured pushdown here
           and dropped it (see Slice 5).</td></tr>
       <tr><td>Net classes</td><td>The project reader (<code>.kicad_pro</code>
-        net settings)</td><td>Class resolution, rules, and differential
-        pairing.</td></tr>
+        net settings)</td><td>KiCad's effective-class resolution and
+        differential pairing (slice 4, <code>net_classes.rs</code>).</td></tr>
       <tr><td>Logical identity</td><td><code>design_json</code></td>
         <td>None. The bundle builder stores it, and the binding table joins
         to it on <code>refdes</code> plus <code>pad_number</code>.</td></tr>
@@ -1023,6 +1023,131 @@
   dielectric, or components alone take about 0.29 s on OBC; for repeated
   requests, a prepared board is the faster route.</p>
 
+  <h2>Slice 4 status</h2>
+  <p>Slice 4 is done. Every rule below follows KiCad 10.0.6 source. Where
+  KiCad itself can answer, results were checked against its scripting API
+  (<code>pcbnew</code> in the KiCad 10.0.6 app) on JTYU-OBC, the corpus
+  boards, and the slice-4 test board.</p>
+  <h3>Net classes</h3>
+  <ul>
+    <li><strong>Input.</strong> <code>materialize_project</code> and
+      <code>PreparedBoard::prepare_project</code> take the board's
+      <code>.kicad_pro</code>. Its hash and size are recorded in
+      <code>source</code>, and <code>max_source_bytes</code> bounds both
+      files together. Without a project, and with no <code>(net_class)</code>
+      forms in the board, classes stay unknown: <code>net_classes</code> is
+      empty and nets carry no class.</li>
+    <li><strong>Resolution</strong> follows
+      <code>NET_SETTINGS::GetEffectiveNetClass</code>:
+      <ul>
+        <li>Every class assigned to the net by name, and every class whose
+          pattern matches it, takes part. A name the project does not define
+          is an implicit class with no rules.</li>
+        <li>With none, the net is in <code>Default</code>.</li>
+        <li>Otherwise the classes sort by priority, then name. Each rule
+          comes from the first class that sets it. If any rule is still
+          unset (the pair via gap excepted, and the tuning profile only when
+          <code>Default</code> has one), <code>Default</code> fills it and
+          joins the list.</li>
+        <li>A single class keeps its name. Several make a composite named
+          by joining theirs with commas, such as
+          <code>USB,Default</code>. <code>NetClass.constituents</code>
+          lists them.</li>
+      </ul></li>
+    <li><strong>Patterns</strong> are bus-expanded and then match as an
+      anchored regex or an anchored wildcard, case-sensitively over the
+      whole name. KiCad compiles the regex as a Tcl advanced regular
+      expression. <code>net_patterns.rs</code> implements its common subset
+      without a regex dependency. A pattern beyond that subset is reported
+      (<code>net_class_pattern_unsupported</code>) and only its wildcard
+      reading applies.</li>
+    <li><strong>Migrations.</strong> <code>net_settings</code> versions
+      below 3 turn class net lists into patterns. Versions below 4 assign
+      priorities in array order, with single-class assignments. An old
+      board's <code>(net_class)</code> forms replace the project's classes,
+      default class, and patterns (<code>BOARD::SetProject</code>); their
+      unlisted rules keep KiCad's built-in values.</li>
+    <li><strong>Evidence.</strong> All 970 OBC nets get the class KiCad
+      reports, including its implicit <code>eMMC</code> and
+      <code>MAC_PHY</code> composites. So do the test board's assignment,
+      wildcard, regex, implicit, and composite cases.</li>
+  </ul>
+  <h3>Differential pairs</h3>
+  <p>Pairs follow <code>MatchDpSuffix</code>. After any trailing digits and
+  underscores, <code>+</code> or <code>P</code> marks the positive net and
+  <code>-</code> or <code>N</code> the negative one, and the complement
+  must exist. The pairs equal KiCad's <code>DpCoupledNet</code> on OBC (26),
+  the backplane (56), and the processing module (28).</p>
+  <h3>Net ties and jumpers</h3>
+  <ul>
+    <li><strong>No net.</strong> KiCad gives footprint copper no net and
+      keeps it out of connectivity. The materializer keeps a shape's
+      authored net, which is usually none; it never inherits a pad's net.
+      The planned "pad-net inheritance" has no basis in KiCad and was
+      dropped.</li>
+    <li><strong>Tied nets.</strong> A copper shape in a net-tie footprint
+      that touches a grouped pad lists, in
+      <code>tied_net_keys</code>, the nets of every pad in that pad's group,
+      as <code>FOOTPRINT::BuildNetTieCache</code> allows. The nets stay
+      separate. Touching is tested on bounds, a superset of KiCad's exact
+      collision test.</li>
+    <li><strong>Groups.</strong> Components record
+      <code>net_tie_groups</code>. These are split as KiCad does, with
+      backslash escapes, and include the pre-20220818 "net tie" keyword
+      form. Components also record <code>jumper_groups</code>: explicit
+      groups, plus one group per repeated pad number when the footprint
+      declares duplicate numbers jumpers.</li>
+  </ul>
+  <h3>Holes, pins, and bodies</h3>
+  <ul>
+    <li><strong>Post-machining.</strong> Counterbores and countersinks
+      appear on hole operations as <code>post_machining</code>.
+      <ul>
+        <li><strong>Copper</strong> loses KiCad's
+          <code>GetPostMachiningKnockout</code> disk on each layer it
+          reaches. The diameters equal KiCad's to the nanometre on the test
+          board.</li>
+        <li><strong>Dielectric</strong> loses the diameter at each slice's
+          nearer surface, as KiCad's STEP export cuts it.</li>
+        <li>KiCad's Gerber keeps the land, so this copper cut goes beyond
+          the plot. A missing stack thickness is reported
+          (<code>post_machining_not_cut</code>).</li>
+      </ul></li>
+    <li><strong>Castellated pads.</strong> Their holes carry
+      <code>castellated</code>. KiCad drills them as ordinary plated holes
+      and does not clip them at the edge.</li>
+    <li><strong>Pin-to-die data.</strong> Pad binding entries carry
+      <code>die_length_nm</code> and <code>die_delay_ps</code>. The file
+      states the delay in picoseconds in every format, including before
+      20251027.</li>
+    <li><strong>Component bodies.</strong> <code>body_bounds</code> is the
+      centreline extent of the courtyard on the footprint's side, else of
+      its fabrication outline, rounded outward by at most 1 nm. KiCad stores
+      no body height.</li>
+  </ul>
+  <h3>Stack</h3>
+  <ul>
+    <li><strong>One rigid region.</strong> The stack has a single rigid
+      region holding every slice, since KiCad describes one build-up
+      (<code>stack.regions</code>; see Stack regions).</li>
+    <li><strong>Board flags.</strong>
+      <code>impedance_controlled</code> records
+      <code>dielectric_constraints</code>, and <code>edge_plating</code>
+      records KiCad's plated-edge flag. KiCad keeps no plated-edge geometry,
+      so none is emitted.</li>
+  </ul>
+  <h3>Pack and gate</h3>
+  <ul>
+    <li><strong>Pack.</strong> Binding sections gain the die-length,
+      tied-net, and die-delay columns. Hole parameters gain post-machining
+      and the castellated flag. Angles keep their exact <code>f64</code>
+      bits.</li>
+    <li><strong>Gate.</strong> It reads a <code>.kicad_pro</code> next to the
+      board. All five corpus boards pass rule 2, the prepared-board check,
+      and the pack round trip. Operation counts are unchanged: no corpus
+      board uses post-machining.</li>
+  </ul>
+
   <h2>Porting from KiCad-Prism's analytic producer</h2>
   <p><code>prism-kicad-native</code> (<code>materialize.rs</code>,
   <code>analytic_contract.rs</code>) already emits analytic copper and
@@ -1093,17 +1218,17 @@
         <td>Lowered mask and paste match <code>kicad-cli</code> Gerber
           output within a stated tolerance.</td></tr>
       <tr><td>4. Net classes, differential pairs, components, remaining
-          copper and holes</td>
+          copper and holes (done)</td>
         <td>Project class resolution, pairing, and component records.
-          Also the open coverage rows below: net ties and jumpers, copper
-          text, pad-net inheritance for footprint copper, plated edges,
-          castellations, counterbores and countersinks, pin-to-die data,
-          and the <code>stack_regions</code> contract with its single
-          rigid region.</td>
-        <td>Results match KiCad on the corpus and on suffix-form vectors.
-          Net-tie bridges keep both nets in DC parity vectors. Plated-edge
-          and post-machined holes match <code>kicad-cli</code> Gerber and
-          drill output.</td></tr>
+          Also the open coverage rows below: net ties and jumpers,
+          footprint-copper nets, plated edges, castellations, counterbores
+          and countersinks, pin-to-die data, and the stack regions contract
+          with its single rigid region.</td>
+        <td>Classes and pairs equal KiCad's scripting API on the corpus and
+          on the slice-4 board. Net-tie bridges list both nets. Post-machining
+          knockouts equal <code>GetPostMachiningKnockout</code>. Plated
+          edges and castellations follow KiCad, which stores no geometry
+          for either (see Slice 4 status).</td></tr>
       <tr><td>5. Packed encoding and serving</td>
         <td>The columnar writer and reader, the chunk index, and a
           prepared board that serves many requests from one emission.
@@ -1139,8 +1264,9 @@
         net; the nets are never merged. Jumper pad groups
         (<code>jumper_pad_groups</code>,
         <code>duplicate_pad_numbers_are_jumpers</code>) are recorded the same
-        way. Core already decodes both.</td><td>Slice 4. Today the bridge is
-        emitted as footprint copper on the empty net.</td></tr>
+        way. Core already decodes both.</td><td>Done in slice 4. The bridge
+        keeps KiCad's (empty) footprint-copper net and lists its tied nets;
+        components record net-tie and jumper groups.</td></tr>
       <tr><td>Unused inner-layer pads</td><td>Honour
         <code>remove_unused_layers</code>, <code>keep_end_layers</code>, and
         zone layer connections; emit only the pads KiCad flashes on each
@@ -1151,11 +1277,15 @@
         layers, custom pads built from graphics, copper text, and logos.
         Mostly <code>planar_region_2d</code>, with the net of the pad they
         belong to when attached.</td><td>Graphics and custom pads done in
-        slice 3. Copper text and pad-net inheritance in slice 4.</td></tr>
+        slice 3, copper text in batch 3. KiCad gives footprint copper no
+        pad net, so none is inherited (slice 4).</td></tr>
       <tr><td>Plated edges and castellations</td><td>Plated-edge geometry
         (<code>edge_plating</code>, decoded by core) with its net.
         Castellated pads (<code>pad_prop_castellated</code>, not decoded
-        yet) as plated holes cut by the profile.</td><td>Slice 4.</td></tr>
+        yet) as plated holes cut by the profile.</td><td>Done in slice 4.
+        KiCad stores only a board-level plated-edge flag, recorded on the
+        stack; castellated holes are flagged and, as in KiCad's drill
+        output, not clipped.</td></tr>
       <tr><td>Surface finish</td><td><code>copper_finish</code> on the stack.
         Its emissivity and high-frequency loss live in
         <code>prism.materials</code>.</td><td>Recorded in slice 2.</td></tr>
@@ -1174,24 +1304,35 @@
         20251101, with back-drill) adds front and back post-machining to
         pads and vias. Core decodes it. Hole operations gain the mode,
         diameter, depth, and countersink angle, and the dielectric and copper
-        subtract the machined volume.</td><td>Slice 4. Back-drill done in
-        slice 2.</td></tr>
+        subtract the machined volume.</td><td>Done in slice 4 (back-drill
+        in slice 2).</td></tr>
       <tr><td>SI pad and layer data</td><td>Per-pad pin-to-die length
         (<code>die_length</code>, decoded) and delay (<code>die_delay</code>,
         not decoded yet; scaled correctly from format 20251027) on the pad's
         binding entry. KiCad's impedance control is one board-level flag
         (<code>dielectric_constraints</code>), recorded on the stack; per-layer
-        targets belong in the simulation setup.</td><td>Slice 4.</td></tr>
+        targets belong in the simulation setup.</td><td>Done in slice
+        4.</td></tr>
     </tbody>
   </table>
 
   <h2>Stack regions (rigid-flex)</h2>
   <ul>
-    <li><strong>Contract.</strong> The stack gains
-      <code>stack_regions</code>. Each region has a region polygon, the
-      subset of slices present, and extra slices that exist only in that
-      region. A rigid board has exactly one region covering the whole
-      board. The a0 contract is rewritten in place to add it.</li>
+    <li><strong>Contract (done in slice 4).</strong> The stack gains
+      <code>regions</code>.
+      <ul>
+        <li>Each region has a key, a kind (rigid or flex), the slices
+          present there in stack order, an optional boundary (absent means
+          the whole board profile), and bend lines.</li>
+        <li>A slice that only one region lists exists only in that
+          region.</li>
+        <li>The validator checks that every slice lies in some region, that
+          each region lists its slices in stack order, that boundaries are
+          given whenever there are several regions, and that only flexible
+          regions bend.</li>
+        <li>The producer always emits one rigid region holding every
+          slice.</li>
+      </ul></li>
     <li><strong>Roles.</strong> <code>SliceRole</code> gains
       <code>coverlay</code>, <code>adhesive</code>, and
       <code>stiffener</code>.</li>

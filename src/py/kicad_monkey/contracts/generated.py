@@ -1589,6 +1589,8 @@ class MaterializationProducer(Struct, forbid_unknown_fields=True, frozen=True):
 class MaterializationSource(Struct, forbid_unknown_fields=True, frozen=True):
     sha256: str
     source_bytes: str
+    project_sha256: str | UnsetType = field(default=UNSET)
+    project_bytes: str | UnsetType = field(default=UNSET)
 
 
 class MaterializationCoordinateSystem(Struct, forbid_unknown_fields=True, frozen=True):
@@ -1608,8 +1610,11 @@ class MaterializationScope(Struct, forbid_unknown_fields=True, frozen=True):
 
 class Stack(Struct, forbid_unknown_fields=True, frozen=True):
     slices: list[StackSlice]
+    regions: Annotated[list[StackRegion], Meta(min_length=1)]
     board_thickness_nm: NonNegativeNm | UnsetType = field(default=UNSET)
     copper_finish: str | UnsetType = field(default=UNSET)
+    impedance_controlled: bool | UnsetType = field(default=UNSET)
+    edge_plating: bool | UnsetType = field(default=UNSET)
 
 
 class Net(Struct, forbid_unknown_fields=True, frozen=True):
@@ -1620,12 +1625,16 @@ class Net(Struct, forbid_unknown_fields=True, frozen=True):
 
 class NetClass(Struct, forbid_unknown_fields=True, frozen=True):
     name: str
+    constituents: Annotated[list[str], Meta(min_length=1)]
     track_width_nm: NonNegativeNm | UnsetType = field(default=UNSET)
     clearance_nm: NonNegativeNm | UnsetType = field(default=UNSET)
     diff_pair_width_nm: NonNegativeNm | UnsetType = field(default=UNSET)
     diff_pair_gap_nm: NonNegativeNm | UnsetType = field(default=UNSET)
+    diff_pair_via_gap_nm: NonNegativeNm | UnsetType = field(default=UNSET)
     via_diameter_nm: NonNegativeNm | UnsetType = field(default=UNSET)
     via_drill_nm: NonNegativeNm | UnsetType = field(default=UNSET)
+    microvia_diameter_nm: NonNegativeNm | UnsetType = field(default=UNSET)
+    microvia_drill_nm: NonNegativeNm | UnsetType = field(default=UNSET)
 
 
 class DiffPair(Struct, forbid_unknown_fields=True, frozen=True):
@@ -1640,6 +1649,8 @@ class Component(Struct, forbid_unknown_fields=True, frozen=True):
     side: BoardSide
     affine: Affine2D
     source_uid: str
+    net_tie_groups: list[PadGroup]
+    jumper_groups: list[PadGroup]
     body_bounds: NmBounds | UnsetType = field(default=UNSET)
     body_height_nm: NonNegativeNm | UnsetType = field(default=UNSET)
 
@@ -1654,6 +1665,9 @@ class BindingEntry(Struct, forbid_unknown_fields=True, frozen=True):
     refdes: str | UnsetType = field(default=UNSET)
     pad_number: str | UnsetType = field(default=UNSET)
     net_key: str | UnsetType = field(default=UNSET)
+    tied_net_keys: list[str] | UnsetType = field(default=UNSET)
+    die_length_nm: NonNegativeNm | UnsetType = field(default=UNSET)
+    die_delay_ps: float | UnsetType = field(default=UNSET)
 
 
 class ChunkEntry(Struct, forbid_unknown_fields=True, frozen=True):
@@ -1686,6 +1700,14 @@ class StackSlice(Struct, forbid_unknown_fields=True, frozen=True):
     loss_tangent: float | UnsetType = field(default=UNSET)
 
 
+class StackRegion(Struct, forbid_unknown_fields=True, frozen=True):
+    key: str
+    kind: StackRegionKind
+    slice_keys: Annotated[list[str], Meta(min_length=1)]
+    bend_lines: list[BendLine]
+    boundary: list[PlanarRegion2d] | UnsetType = field(default=UNSET)
+
+
 BoardSide = Literal["front", "back"]
 
 
@@ -1696,6 +1718,10 @@ class Affine2D(Struct, forbid_unknown_fields=True, frozen=True):
     m22: float
     tx_nm: Nm
     ty_nm: Nm
+
+
+class PadGroup(Struct, forbid_unknown_fields=True, frozen=True):
+    pad_numbers: Annotated[list[str], Meta(min_length=1)]
 
 
 class SurfaceOperation(Struct, forbid_unknown_fields=True, frozen=True, tag="surface", tag_field="kind"):
@@ -1719,10 +1745,12 @@ class HoleOperation(Struct, forbid_unknown_fields=True, frozen=True, tag="hole",
     start_slice_key: str
     end_slice_key: str
     backdrills: list[Backdrill]
+    post_machining: list[PostMachining]
     bounds: NmBounds
     net_key: str | UnsetType = field(default=UNSET)
     plating_thickness_nm: NonNegativeNm | UnsetType = field(default=UNSET)
     protection: HoleProtection | UnsetType = field(default=UNSET)
+    castellated: bool | UnsetType = field(default=UNSET)
 
 
 BindingSourceKind = Literal["track", "track_arc", "via", "pad", "zone_fill", "board_graphic", "footprint_graphic", "board_text", "footprint_text", "profile", "derived"]
@@ -1731,7 +1759,22 @@ BindingSourceKind = Literal["track", "track_arc", "via", "pad", "zone_fill", "bo
 DiagnosticSeverity = Literal["info", "warning", "error"]
 
 
-SliceRole = Literal["conductor", "dielectric", "solder_mask", "paste", "silkscreen"]
+SliceRole = Literal["conductor", "dielectric", "solder_mask", "paste", "silkscreen", "coverlay", "adhesive", "stiffener"]
+
+
+StackRegionKind = Literal["rigid", "flex"]
+
+
+class PlanarRegion2d(Struct, forbid_unknown_fields=True, frozen=True, tag="planar_region_2d", tag_field="kind"):
+    outer: Contour
+    holes: list[Contour]
+
+
+class BendLine(Struct, forbid_unknown_fields=True, frozen=True):
+    start_nm: NmPoint
+    end_nm: NmPoint
+    radius_nm: NonNegativeNm
+    angle_deg: float
 
 
 MaterialAction = Literal["add", "subtract"]
@@ -1757,6 +1800,22 @@ class Backdrill(Struct, forbid_unknown_fields=True, frozen=True):
     side: BoardSide
     diameter_nm: NonNegativeNm | UnsetType = field(default=UNSET)
     until_slice_key: str | UnsetType = field(default=UNSET)
+
+
+class PostMachining(Struct, forbid_unknown_fields=True, frozen=True):
+    side: BoardSide
+    mode: PostMachiningMode
+    diameter_nm: NonNegativeNm | UnsetType = field(default=UNSET)
+    depth_nm: NonNegativeNm | UnsetType = field(default=UNSET)
+    angle_deg: float | UnsetType = field(default=UNSET)
+
+
+class Contour(Struct, forbid_unknown_fields=True, frozen=True):
+    start_nm: NmPoint
+    segments: Annotated[list[PathSegment], Meta(min_length=1)]
+
+
+NmPoint = Annotated[list[Nm], Meta(min_length=2, max_length=2)]
 
 
 class Disk2d(Struct, forbid_unknown_fields=True, frozen=True, tag="disk_2d", tag_field="kind"):
@@ -1814,11 +1873,6 @@ class SweptPath2d(Struct, forbid_unknown_fields=True, frozen=True, tag="swept_pa
     join: PathJoin
 
 
-class PlanarRegion2d(Struct, forbid_unknown_fields=True, frozen=True, tag="planar_region_2d", tag_field="kind"):
-    outer: Contour
-    holes: list[Contour]
-
-
 class SideProtection(Struct, forbid_unknown_fields=True, frozen=True):
     tented: ProtectionState
     covered: ProtectionState
@@ -1828,24 +1882,19 @@ class SideProtection(Struct, forbid_unknown_fields=True, frozen=True):
 ProtectionState = Literal["yes", "no", "unspecified"]
 
 
-NmPoint = Annotated[list[Nm], Meta(min_length=2, max_length=2)]
-
-
-RectCorner = Literal["top_left", "top_right", "bottom_left", "bottom_right"]
+PostMachiningMode = Literal["counterbore", "countersink"]
 
 
 PathSegment = Union["LineSegment", "ArcSegment", "CubicSegment"]
+
+
+RectCorner = Literal["top_left", "top_right", "bottom_left", "bottom_right"]
 
 
 PathCap = Literal["round", "flat"]
 
 
 PathJoin = Literal["round", "miter"]
-
-
-class Contour(Struct, forbid_unknown_fields=True, frozen=True):
-    start_nm: NmPoint
-    segments: Annotated[list[PathSegment], Meta(min_length=1)]
 
 
 class LineSegment(Struct, forbid_unknown_fields=True, frozen=True, tag="line", tag_field="kind"):
@@ -4228,19 +4277,27 @@ __all__ = (
     "ChunkEntry",
     "MaterializationDiagnostic",
     "StackSlice",
+    "StackRegion",
     "BoardSide",
     "Affine2D",
+    "PadGroup",
     "SurfaceOperation",
     "HoleOperation",
     "BindingSourceKind",
     "DiagnosticSeverity",
     "SliceRole",
+    "StackRegionKind",
+    "PlanarRegion2d",
+    "BendLine",
     "MaterialAction",
     "SurfaceMaterial",
     "Shape2d",
     "HolePlating",
     "HoleProtection",
     "Backdrill",
+    "PostMachining",
+    "Contour",
+    "NmPoint",
     "Disk2d",
     "Rect2d",
     "RoundedRect2d",
@@ -4249,15 +4306,13 @@ __all__ = (
     "Capsule2d",
     "Annulus2d",
     "SweptPath2d",
-    "PlanarRegion2d",
     "SideProtection",
     "ProtectionState",
-    "NmPoint",
-    "RectCorner",
+    "PostMachiningMode",
     "PathSegment",
+    "RectCorner",
     "PathCap",
     "PathJoin",
-    "Contour",
     "LineSegment",
     "ArcSegment",
     "CubicSegment",

@@ -129,6 +129,12 @@
                 },
                 "source_bytes": {
                     "type": "string"
+                },
+                "project_sha256": {
+                    "type": "string"
+                },
+                "project_bytes": {
+                    "type": "string"
                 }
             },
             "required": [
@@ -137,7 +143,8 @@
             ],
             "unevaluatedProperties": {
                 "not": {}
-            }
+            },
+            "description": "The board file, and the project file when one was given: net classes come\nonly from the project."
         },
         "MaterializationCoordinateSystem": {
             "type": "object",
@@ -217,15 +224,31 @@
                         "$ref": "#/$defs/StackSlice"
                     }
                 },
+                "regions": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/$defs/StackRegion"
+                    },
+                    "minItems": 1
+                },
                 "board_thickness_nm": {
                     "$ref": "#/$defs/NonNegativeNm"
                 },
                 "copper_finish": {
                     "type": "string"
+                },
+                "impedance_controlled": {
+                    "type": "boolean",
+                    "description": "KiCad's board-level impedance-control flag (`dielectric_constraints`)."
+                },
+                "edge_plating": {
+                    "type": "boolean",
+                    "description": "KiCad's board-level plated-edge flag (`edge_plating`). KiCad stores no\nplated-edge geometry; fabrication plates the profile."
                 }
             },
             "required": [
-                "slices"
+                "slices",
+                "regions"
             ],
             "unevaluatedProperties": {
                 "not": {}
@@ -259,6 +282,13 @@
                 "name": {
                     "type": "string"
                 },
+                "constituents": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    },
+                    "minItems": 1
+                },
                 "track_width_nm": {
                     "$ref": "#/$defs/NonNegativeNm"
                 },
@@ -271,20 +301,30 @@
                 "diff_pair_gap_nm": {
                     "$ref": "#/$defs/NonNegativeNm"
                 },
+                "diff_pair_via_gap_nm": {
+                    "$ref": "#/$defs/NonNegativeNm"
+                },
                 "via_diameter_nm": {
                     "$ref": "#/$defs/NonNegativeNm"
                 },
                 "via_drill_nm": {
                     "$ref": "#/$defs/NonNegativeNm"
+                },
+                "microvia_diameter_nm": {
+                    "$ref": "#/$defs/NonNegativeNm"
+                },
+                "microvia_drill_nm": {
+                    "$ref": "#/$defs/NonNegativeNm"
                 }
             },
             "required": [
-                "name"
+                "name",
+                "constituents"
             ],
             "unevaluatedProperties": {
                 "not": {}
             },
-            "description": "Design rules of one KiCad net class, as the project defines them."
+            "description": "Effective design rules of a KiCad net class. A net matched by several\nclasses gets a composite class: `constituents` are the matched classes by\npriority, with `Default` last when it supplied a value, `name` joins them\nwith commas, and each rule comes from the first constituent that sets it.\nA single class lists only itself."
         },
         "DiffPair": {
             "type": "object",
@@ -306,7 +346,8 @@
             ],
             "unevaluatedProperties": {
                 "not": {}
-            }
+            },
+            "description": "Two nets paired by KiCad's suffix rule: after any trailing digits and\nunderscores, `+` or `P` marks the positive net and `-` or `N` the\nnegative one, and both nets exist."
         },
         "Component": {
             "type": "object",
@@ -332,6 +373,20 @@
                 },
                 "body_height_nm": {
                     "$ref": "#/$defs/NonNegativeNm"
+                },
+                "net_tie_groups": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/$defs/PadGroup"
+                    },
+                    "description": "Net-tie pad groups: copper in the footprint may join these pads' nets."
+                },
+                "jumper_groups": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/$defs/PadGroup"
+                    },
+                    "description": "Jumper pad groups, connected inside the part without board copper."
                 }
             },
             "required": [
@@ -339,7 +394,9 @@
                 "footprint",
                 "side",
                 "affine",
-                "source_uid"
+                "source_uid",
+                "net_tie_groups",
+                "jumper_groups"
             ],
             "unevaluatedProperties": {
                 "not": {}
@@ -377,6 +434,21 @@
                 },
                 "net_key": {
                     "type": "string"
+                },
+                "tied_net_keys": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    },
+                    "description": "Nets a net-tie bridge joins: the nets of the net-tie pads its copper\ntouches. The nets stay separate; consumers decide whether to join them."
+                },
+                "die_length_nm": {
+                    "$ref": "#/$defs/NonNegativeNm",
+                    "description": "Pad-to-die length of the pad's pin."
+                },
+                "die_delay_ps": {
+                    "type": "number",
+                    "description": "Pad-to-die delay of the pad's pin, in picoseconds."
                 }
             },
             "required": [
@@ -557,6 +629,46 @@
             },
             "description": "One physical slice of the rigid board stack. `order` is zero at the front\noutermost slice and increases toward the back. Z positions are derived\nfrom the ordered thicknesses and are never stored. Absent values are\nunknown, never defaulted."
         },
+        "StackRegion": {
+            "type": "object",
+            "properties": {
+                "key": {
+                    "type": "string"
+                },
+                "kind": {
+                    "$ref": "#/$defs/StackRegionKind"
+                },
+                "slice_keys": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    },
+                    "minItems": 1
+                },
+                "boundary": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/$defs/PlanarRegion2d"
+                    }
+                },
+                "bend_lines": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/$defs/BendLine"
+                    }
+                }
+            },
+            "required": [
+                "key",
+                "kind",
+                "slice_keys",
+                "bend_lines"
+            ],
+            "unevaluatedProperties": {
+                "not": {}
+            },
+            "description": "Part of the board with its own build-up. `slice_keys` lists the slices\npresent there in stack order. A slice that only one region lists exists\nonly in that region. Without `boundary` the region is the whole board\nprofile. A rigid board has exactly one rigid region holding every slice."
+        },
         "BoardSide": {
             "type": "string",
             "enum": [
@@ -598,6 +710,25 @@
                 "not": {}
             },
             "description": "One fully composed local-to-board transform. A shape's local coordinates\nmap to board coordinates as x' = m11*x + m12*y + tx_nm and\ny' = m21*x + m22*y + ty_nm. Reflection, rotation, and non-uniform scale are\nordinary cases of the same matrix."
+        },
+        "PadGroup": {
+            "type": "object",
+            "properties": {
+                "pad_numbers": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    },
+                    "minItems": 1
+                }
+            },
+            "required": [
+                "pad_numbers"
+            ],
+            "unevaluatedProperties": {
+                "not": {}
+            },
+            "description": "Pad numbers of one footprint that KiCad connects as a group."
         },
         "SurfaceOperation": {
             "type": "object",
@@ -699,6 +830,16 @@
                         "$ref": "#/$defs/Backdrill"
                     }
                 },
+                "post_machining": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/$defs/PostMachining"
+                    }
+                },
+                "castellated": {
+                    "type": "boolean",
+                    "description": "The hole belongs to a castellated pad, cut by the board edge in fabrication."
+                },
                 "bounds": {
                     "$ref": "#/$defs/NmBounds"
                 }
@@ -712,6 +853,7 @@
                 "start_slice_key",
                 "end_slice_key",
                 "backdrills",
+                "post_machining",
                 "bounds"
             ],
             "unevaluatedProperties": {
@@ -756,8 +898,73 @@
                 "dielectric",
                 "solder_mask",
                 "paste",
-                "silkscreen"
+                "silkscreen",
+                "coverlay",
+                "adhesive",
+                "stiffener"
+            ],
+            "description": "Physical role of a slice. `coverlay`, `adhesive`, and `stiffener` occur\nonly in flexible or stiffened stack regions."
+        },
+        "StackRegionKind": {
+            "type": "string",
+            "enum": [
+                "rigid",
+                "flex"
             ]
+        },
+        "PlanarRegion2d": {
+            "type": "object",
+            "properties": {
+                "kind": {
+                    "type": "string",
+                    "const": "planar_region_2d"
+                },
+                "outer": {
+                    "$ref": "#/$defs/Contour"
+                },
+                "holes": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/$defs/Contour"
+                    }
+                }
+            },
+            "required": [
+                "kind",
+                "outer",
+                "holes"
+            ],
+            "unevaluatedProperties": {
+                "not": {}
+            },
+            "description": "One analytic outer contour with optional hole contours."
+        },
+        "BendLine": {
+            "type": "object",
+            "properties": {
+                "start_nm": {
+                    "$ref": "#/$defs/NmPoint"
+                },
+                "end_nm": {
+                    "$ref": "#/$defs/NmPoint"
+                },
+                "radius_nm": {
+                    "$ref": "#/$defs/NonNegativeNm"
+                },
+                "angle_deg": {
+                    "type": "number"
+                }
+            },
+            "required": [
+                "start_nm",
+                "end_nm",
+                "radius_nm",
+                "angle_deg"
+            ],
+            "unevaluatedProperties": {
+                "not": {}
+            },
+            "description": "Fold line of a flexible region, for 3D views; flat analyses ignore it."
         },
         "MaterialAction": {
             "type": "string",
@@ -861,6 +1068,66 @@
                 "not": {}
             },
             "description": "Controlled-depth removal of barrel plating from one side."
+        },
+        "PostMachining": {
+            "type": "object",
+            "properties": {
+                "side": {
+                    "$ref": "#/$defs/BoardSide"
+                },
+                "mode": {
+                    "$ref": "#/$defs/PostMachiningMode"
+                },
+                "diameter_nm": {
+                    "$ref": "#/$defs/NonNegativeNm"
+                },
+                "depth_nm": {
+                    "$ref": "#/$defs/NonNegativeNm"
+                },
+                "angle_deg": {
+                    "type": "number"
+                }
+            },
+            "required": [
+                "side",
+                "mode"
+            ],
+            "unevaluatedProperties": {
+                "not": {}
+            },
+            "description": "Counterbore or countersink machined from one side. A countersink's\n`angle_deg` is the full included cone angle. Without `depth_nm`, a\ncountersink runs to its cone apex."
+        },
+        "Contour": {
+            "type": "object",
+            "properties": {
+                "start_nm": {
+                    "$ref": "#/$defs/NmPoint"
+                },
+                "segments": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/$defs/PathSegment"
+                    },
+                    "minItems": 1
+                }
+            },
+            "required": [
+                "start_nm",
+                "segments"
+            ],
+            "unevaluatedProperties": {
+                "not": {}
+            },
+            "description": "Closed contour of line, arc, and cubic segments starting at `start_nm`.\nWhen the last segment does not end at `start_nm`, a straight closing\nsegment back to it is implied."
+        },
+        "NmPoint": {
+            "type": "array",
+            "items": {
+                "$ref": "#/$defs/Nm"
+            },
+            "minItems": 2,
+            "maxItems": 2,
+            "description": "Point in KiCad's board frame: X to the right, Y down, in nanometres."
         },
         "Disk2d": {
             "type": "object",
@@ -1117,33 +1384,6 @@
             },
             "description": "Open centreline of line, arc, and cubic segments swept by a constant width."
         },
-        "PlanarRegion2d": {
-            "type": "object",
-            "properties": {
-                "kind": {
-                    "type": "string",
-                    "const": "planar_region_2d"
-                },
-                "outer": {
-                    "$ref": "#/$defs/Contour"
-                },
-                "holes": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/$defs/Contour"
-                    }
-                }
-            },
-            "required": [
-                "kind",
-                "outer",
-                "holes"
-            ],
-            "unevaluatedProperties": {
-                "not": {}
-            },
-            "description": "One analytic outer contour with optional hole contours."
-        },
         "SideProtection": {
             "type": "object",
             "properties": {
@@ -1175,22 +1415,11 @@
             ],
             "description": "KiCad's tri-state for a protection option: set, cleared, or left to the board default."
         },
-        "NmPoint": {
-            "type": "array",
-            "items": {
-                "$ref": "#/$defs/Nm"
-            },
-            "minItems": 2,
-            "maxItems": 2,
-            "description": "Point in KiCad's board frame: X to the right, Y down, in nanometres."
-        },
-        "RectCorner": {
+        "PostMachiningMode": {
             "type": "string",
             "enum": [
-                "top_left",
-                "top_right",
-                "bottom_left",
-                "bottom_right"
+                "counterbore",
+                "countersink"
             ]
         },
         "PathSegment": {
@@ -1206,6 +1435,15 @@
                 }
             ]
         },
+        "RectCorner": {
+            "type": "string",
+            "enum": [
+                "top_left",
+                "top_right",
+                "bottom_left",
+                "bottom_right"
+            ]
+        },
         "PathCap": {
             "type": "string",
             "enum": [
@@ -1219,29 +1457,6 @@
                 "round",
                 "miter"
             ]
-        },
-        "Contour": {
-            "type": "object",
-            "properties": {
-                "start_nm": {
-                    "$ref": "#/$defs/NmPoint"
-                },
-                "segments": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/$defs/PathSegment"
-                    },
-                    "minItems": 1
-                }
-            },
-            "required": [
-                "start_nm",
-                "segments"
-            ],
-            "unevaluatedProperties": {
-                "not": {}
-            },
-            "description": "Closed contour of line, arc, and cubic segments starting at `start_nm`.\nWhen the last segment does not end at `start_nm`, a straight closing\nsegment back to it is implied."
         },
         "LineSegment": {
             "type": "object",

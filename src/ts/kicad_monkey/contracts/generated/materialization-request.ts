@@ -27,6 +27,9 @@ export interface MaterializationRequestA0 {
   net_keys?: string[];
   region?: NmBounds;
   tile_size_nm: NonNegativeNm;
+  /**
+   * Bounds the board and project files together.
+   */
   max_source_bytes: string;
   max_operations: number;
   max_points: number;

@@ -5,10 +5,12 @@
 //! As in KiCad's own 3D model, a back-drill removes material from its
 //! drilled outer copper layer through its end layer inclusive, so every
 //! dielectric slice between the two is cut at the back-drill diameter.
+//! Counterbores and countersinks cut the slices they reach (`machining.rs`).
 
 use super::emit::{Emitter, Material, Origin};
 use super::geometry::{identity, origin};
 use super::holes::HoleSpec;
+use super::machining::{Depths, dielectric_cut, report_dielectric_unknown};
 use kicad_monkey_contracts::generated::materialization_document::{
     Backdrill, BindingSourceKind, BoardSide, Disk2d, MaterialAction, NonNegativeNm, PlanarRegion2d,
     Shape2d, SliceRole, Stack, SurfaceMaterial,
@@ -114,7 +116,7 @@ fn cut_hole(
     hole: &HoleSpec,
     slice_key: &str,
     order: u32,
-    orders: &Orders<'_>,
+    (orders, depths): (&Orders<'_>, &Depths<'_>),
     emitter: &mut Emitter,
 ) {
     let span = orders
@@ -131,6 +133,9 @@ fn cut_hole(
             subtract(emitter, hole, slice_key, bore(diameter));
         }
     }
+    if let Ok(Some(shape)) = dielectric_cut(hole, slice_key, depths) {
+        subtract(emitter, hole, slice_key, shape);
+    }
 }
 
 pub(crate) fn dielectric_regions(
@@ -144,6 +149,8 @@ pub(crate) fn dielectric_regions(
     }
     let orders = Orders::new(stack);
     report_unplaceable(holes, &orders, emitter);
+    let depths = Depths::new(stack);
+    report_dielectric_unknown(holes, stack, &depths, emitter);
     for slice in stack
         .slices
         .iter()
@@ -165,7 +172,7 @@ pub(crate) fn dielectric_regions(
             );
         }
         for hole in holes {
-            cut_hole(hole, &slice.key, slice.order, &orders, emitter);
+            cut_hole(hole, &slice.key, slice.order, (&orders, &depths), emitter);
         }
     }
 }

@@ -155,6 +155,7 @@ impl ::std::convert::TryFrom<::std::string::String> for MaterialProduct {
 ///      "minimum": 0.0
 ///    },
 ///    "max_source_bytes": {
+///      "description": "Bounds the board and project files together.",
 ///      "type": "string"
 ///    },
 ///    "net_keys": {
@@ -199,6 +200,7 @@ impl ::std::convert::TryFrom<::std::string::String> for MaterialProduct {
 pub struct MaterializationRequestA0 {
     pub max_operations: u32,
     pub max_points: u32,
+    ///Bounds the board and project files together.
     pub max_source_bytes: ::std::string::String,
     #[serde(default, skip_serializing_if = "::std::vec::Vec::is_empty")]
     pub net_keys: ::std::vec::Vec<::std::string::String>,

@@ -15,7 +15,9 @@ fn document() -> MaterializationDocumentA0 {
         "source": { "sha256": "0".repeat(64), "source_bytes": "0" },
         "coordinate_system": { "unit": "nm", "x_axis": "board_right", "y_axis": "board_down" },
         "scope": { "products": ["copper"], "tile_size_nm": 10_000_000, "complete": false },
-        "stack": { "slices": [ { "key": "copper.front", "role": "conductor", "order": 0 } ] },
+        "stack": { "slices": [ { "key": "copper.front", "role": "conductor", "order": 0 } ],
+                   "regions": [ { "key": "rigid", "kind": "rigid", "bend_lines": [],
+                                  "slice_keys": ["copper.front"] } ] },
         "nets": [ { "key": "GND", "name": "GND" } ],
         "net_classes": [], "diff_pairs": [], "components": [],
         "operations": [ {

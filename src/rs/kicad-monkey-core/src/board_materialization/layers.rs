@@ -10,7 +10,7 @@ use super::geometry::nm;
 use super::stack::{CopperStack, slice_key};
 use crate::pcb::{PcbStackup, PcbStackupLayer};
 use kicad_monkey_contracts::generated::materialization_document::{
-    BoardSide, NonNegativeNm, SliceRole, Stack, StackSlice,
+    BoardSide, NonNegativeNm, SliceRole, Stack, StackRegion, StackRegionKind, StackSlice,
 };
 
 /// Stack plus the reason it is incomplete, when it is.
@@ -49,6 +49,9 @@ fn technical_key(role: SliceRole, side: Option<BoardSide>, name: &str) -> String
         SliceRole::Silkscreen => "silkscreen",
         SliceRole::Paste => "paste",
         SliceRole::SolderMask => "mask",
+        SliceRole::Coverlay => "coverlay",
+        SliceRole::Adhesive => "adhesive",
+        SliceRole::Stiffener => "stiffener",
         SliceRole::Conductor => return slice_key(name),
         SliceRole::Dielectric => {
             let slug: String = name
@@ -203,12 +206,28 @@ pub(crate) fn board_stack(
             )),
         ),
     };
+    let slices = renumber(slices);
     BoardStack {
         stack: Stack {
-            slices: renumber(slices),
+            regions: vec![rigid_region(&slices)],
+            slices,
             board_thickness_nm: thickness,
             copper_finish: finish,
+            impedance_controlled: stackup.map(|value| value.dielectric_constraints),
+            edge_plating: stackup.map(|value| value.edge_plating),
         },
         warning,
+    }
+}
+
+/// KiCad describes one build-up for the whole board, so the stack has one
+/// rigid region holding every slice, bounded by the board profile.
+fn rigid_region(slices: &[StackSlice]) -> StackRegion {
+    StackRegion {
+        key: "rigid".to_owned(),
+        kind: StackRegionKind::Rigid,
+        slice_keys: slices.iter().map(|slice| slice.key.clone()).collect(),
+        boundary: Vec::new(),
+        bend_lines: Vec::new(),
     }
 }

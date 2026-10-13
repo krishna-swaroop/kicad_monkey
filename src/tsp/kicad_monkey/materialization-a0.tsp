@@ -205,12 +205,19 @@ enum MaterialProduct {
   components,
 }
 
+/**
+ * Physical role of a slice. `coverlay`, `adhesive`, and `stiffener` occur
+ * only in flexible or stiffened stack regions.
+ */
 enum SliceRole {
   conductor,
   dielectric,
   solder_mask,
   paste,
   silkscreen,
+  coverlay,
+  adhesive,
+  stiffener,
 }
 
 enum BoardSide {
@@ -236,10 +243,45 @@ model StackSlice {
   loss_tangent?: float64;
 }
 
+enum StackRegionKind {
+  rigid,
+  flex,
+}
+
+/** Fold line of a flexible region, for 3D views; flat analyses ignore it. */
+model BendLine {
+  start_nm: NmPoint;
+  end_nm: NmPoint;
+  radius_nm: NonNegativeNm;
+  angle_deg: float64;
+}
+
+/**
+ * Part of the board with its own build-up. `slice_keys` lists the slices
+ * present there in stack order. A slice that only one region lists exists
+ * only in that region. Without `boundary` the region is the whole board
+ * profile. A rigid board has exactly one rigid region holding every slice.
+ */
+model StackRegion {
+  key: string;
+  kind: StackRegionKind;
+  @minItems(1) slice_keys: string[];
+  boundary?: PlanarRegion2d[];
+  bend_lines: BendLine[];
+}
+
 model Stack {
   slices: StackSlice[];
+  @minItems(1) regions: StackRegion[];
   board_thickness_nm?: NonNegativeNm;
   copper_finish?: string;
+  /** KiCad's board-level impedance-control flag (`dielectric_constraints`). */
+  impedance_controlled?: boolean;
+  /**
+   * KiCad's board-level plated-edge flag (`edge_plating`). KiCad stores no
+   * plated-edge geometry; fabrication plates the profile.
+   */
+  edge_plating?: boolean;
 }
 
 // ---------------------------------------------------------------- nets
@@ -251,17 +293,32 @@ model Net {
   net_class?: string;
 }
 
-/** Design rules of one KiCad net class, as the project defines them. */
+/**
+ * Effective design rules of a KiCad net class. A net matched by several
+ * classes gets a composite class: `constituents` are the matched classes by
+ * priority, with `Default` last when it supplied a value, `name` joins them
+ * with commas, and each rule comes from the first constituent that sets it.
+ * A single class lists only itself.
+ */
 model NetClass {
   name: string;
+  @minItems(1) constituents: string[];
   track_width_nm?: NonNegativeNm;
   clearance_nm?: NonNegativeNm;
   diff_pair_width_nm?: NonNegativeNm;
   diff_pair_gap_nm?: NonNegativeNm;
+  diff_pair_via_gap_nm?: NonNegativeNm;
   via_diameter_nm?: NonNegativeNm;
   via_drill_nm?: NonNegativeNm;
+  microvia_diameter_nm?: NonNegativeNm;
+  microvia_drill_nm?: NonNegativeNm;
 }
 
+/**
+ * Two nets paired by KiCad's suffix rule: after any trailing digits and
+ * underscores, `+` or `P` marks the positive net and `-` or `N` the
+ * negative one, and both nets exist.
+ */
 model DiffPair {
   base_name: string;
   positive_net_key: string;
@@ -351,6 +408,24 @@ model HoleProtection {
   capped: ProtectionState;
 }
 
+enum PostMachiningMode {
+  counterbore,
+  countersink,
+}
+
+/**
+ * Counterbore or countersink machined from one side. A countersink's
+ * `angle_deg` is the full included cone angle. Without `depth_nm`, a
+ * countersink runs to its cone apex.
+ */
+model PostMachining {
+  side: BoardSide;
+  mode: PostMachiningMode;
+  diameter_nm?: NonNegativeNm;
+  depth_nm?: NonNegativeNm;
+  angle_deg?: float64;
+}
+
 /** Controlled-depth removal of barrel plating from one side. */
 model Backdrill {
   side: BoardSide;
@@ -374,6 +449,9 @@ model HoleOperation {
   plating_thickness_nm?: NonNegativeNm;
   protection?: HoleProtection;
   backdrills: Backdrill[];
+  post_machining: PostMachining[];
+  /** The hole belongs to a castellated pad, cut by the board edge in fabrication. */
+  castellated?: boolean;
   bounds: NmBounds;
 }
 
@@ -384,6 +462,11 @@ union MaterialOperation {
 
 // ---------------------------------------------------------------- components and binding
 
+/** Pad numbers of one footprint that KiCad connects as a group. */
+model PadGroup {
+  @minItems(1) pad_numbers: string[];
+}
+
 model Component {
   refdes: string;
   footprint: string;
@@ -393,6 +476,10 @@ model Component {
   /** Body extent in footprint-local coordinates, from courtyard or fabrication outline. */
   body_bounds?: NmBounds;
   body_height_nm?: NonNegativeNm;
+  /** Net-tie pad groups: copper in the footprint may join these pads' nets. */
+  net_tie_groups: PadGroup[];
+  /** Jumper pad groups, connected inside the part without board copper. */
+  jumper_groups: PadGroup[];
 }
 
 enum BindingSourceKind {
@@ -420,6 +507,15 @@ model BindingEntry {
   refdes?: string;
   pad_number?: string;
   net_key?: string;
+  /**
+   * Nets a net-tie bridge joins: the nets of the net-tie pads its copper
+   * touches. The nets stay separate; consumers decide whether to join them.
+   */
+  tied_net_keys?: string[];
+  /** Pad-to-die length of the pad's pin. */
+  die_length_nm?: NonNegativeNm;
+  /** Pad-to-die delay of the pad's pin, in picoseconds. */
+  die_delay_ps?: float64;
 }
 
 // ---------------------------------------------------------------- scope, chunks, document
@@ -481,9 +577,15 @@ model MaterializationProducer {
   version: string;
 }
 
+/**
+ * The board file, and the project file when one was given: net classes come
+ * only from the project.
+ */
 model MaterializationSource {
   sha256: string;
   source_bytes: uint64;
+  project_sha256?: string;
+  project_bytes?: uint64;
 }
 
 model MaterializationCoordinateSystem {
@@ -504,6 +606,7 @@ model MaterializationRequest {
   net_keys?: string[];
   region?: NmBounds;
   tile_size_nm: NonNegativeNm;
+  /** Bounds the board and project files together. */
   max_source_bytes: uint64;
   max_operations: uint32;
   max_points: uint32;

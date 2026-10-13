@@ -9,14 +9,15 @@
 //! Graphics on copper layers are copper; see [`copper_graphics`].
 
 use super::emit::{Emitter, Origin, source_uid};
-use super::geometry::{footprint_affine, identity, nm64};
+use super::geometry::{board_bounds, footprint_affine, identity, nm64};
 use super::graphics::{Drawn, circle, line_to, point, rect_shapes, swept};
+use super::net_ties::NetTies;
 use super::nets::NetNames;
 use super::pads::{polygon, reference};
 use super::stack::CopperStack;
 use crate::pcb::{PcbFootprint, PcbFootprintGraphic, PcbGraphic, PcbGraphicKind, PcbPoint};
 use kicad_monkey_contracts::generated::materialization_document::{
-    ArcSegment, BindingSourceKind, CubicSegment, PathSegment, Shape2d,
+    ArcSegment, BindingSourceKind, CubicSegment, Nm, NmBounds, PathSegment, Shape2d,
 };
 
 /// KiCad's `DEFAULT_LINE_WIDTH` for unfilled shapes authored without one.
@@ -160,15 +161,58 @@ pub(crate) fn graphic_shapes(graphic: &PcbGraphic, layer: &str, drawn: &mut Draw
     drawn.shapes.extend(closed_shapes(graphic, solid, stroke));
 }
 
+/// Centreline bounds of the graphics drawn on `layer`, in their own frame:
+/// the drawn shapes' bounds less half the stroke, as KiCad outlines a
+/// courtyard. `None` when nothing is drawn there.
+pub(crate) fn outline_bounds<'a>(
+    graphics: impl Iterator<Item = &'a PcbGraphic>,
+    layer: &str,
+) -> Option<NmBounds> {
+    let mut union: Option<[i64; 4]> = None;
+    for graphic in graphics.filter(|graphic| graphic_layers(graphic).contains(&layer)) {
+        let mut drawn = Drawn::default();
+        let (_, stroke) = fill_and_stroke(graphic, layer, &mut drawn);
+        graphic_shapes(graphic, layer, &mut drawn);
+        let half = stroke / 2;
+        for shape in &drawn.shapes {
+            let b = board_bounds(shape, &identity());
+            let shrunk = [
+                i64::from(*b.min_x_nm) + half,
+                i64::from(*b.min_y_nm) + half,
+                i64::from(*b.max_x_nm) - half,
+                i64::from(*b.max_y_nm) - half,
+            ];
+            union = Some(union.map_or(shrunk, |u| {
+                [
+                    u[0].min(shrunk[0]),
+                    u[1].min(shrunk[1]),
+                    u[2].max(shrunk[2]),
+                    u[3].max(shrunk[3]),
+                ]
+            }));
+        }
+    }
+    let [min_x, min_y, max_x, max_y] = union?;
+    let clamp = |value: i64| Nm(value.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32);
+    (min_x <= max_x && min_y <= max_y).then(|| NmBounds {
+        min_x_nm: clamp(min_x),
+        min_y_nm: clamp(min_y),
+        max_x_nm: clamp(max_x),
+        max_y_nm: clamp(max_y),
+    })
+}
+
 /// Board and footprint graphics on copper layers, emitted as copper on the
-/// graphic's net (footprint graphics and unconnected shapes use the empty
-/// net).
+/// graphic's authored net, as KiCad stores it (KiCad gives footprint
+/// copper no net of its own; an unconnected shape has the empty net). A
+/// footprint shape bridging net-tie pads lists the nets it may join.
 pub(crate) fn copper_graphics(
     board: &[PcbGraphic],
     footprint: &[PcbFootprintGraphic],
     footprints: &[PcbFootprint],
     copper: &CopperStack,
     nets: &NetNames,
+    ties: &NetTies,
     emitter: &mut Emitter,
 ) {
     let placed_board = board.iter().enumerate().map(|(position, graphic)| {
@@ -179,6 +223,7 @@ pub(crate) fn copper_graphics(
             uid,
             None,
             identity(),
+            None,
         )
     });
     let placed_footprint = footprint
@@ -190,9 +235,17 @@ pub(crate) fn copper_graphics(
             let uid = source_uid("footprint_graphic", graphic.uuid.as_deref(), position);
             let affine = footprint_affine(footprint);
             let kind = BindingSourceKind::FootprintGraphic;
-            Some((graphic, kind, uid, Some(reference(footprint)), affine))
+            let index = Some(owned.footprint_index);
+            Some((
+                graphic,
+                kind,
+                uid,
+                Some(reference(footprint)),
+                affine,
+                index,
+            ))
         });
-    for (graphic, kind, uid, refdes, affine) in placed_board.chain(placed_footprint) {
+    for (graphic, kind, uid, refdes, affine, owner) in placed_board.chain(placed_footprint) {
         for layer in graphic_layers(graphic) {
             let Some(slice) = copper.key(layer) else {
                 continue;
@@ -212,6 +265,14 @@ pub(crate) fn copper_graphics(
             graphic_shapes(graphic, layer, &mut drawn);
             for (code, message) in drawn.unsupported {
                 emitter.warn(code, message, Some(uid.clone()));
+            }
+            if let Some(index) = owner {
+                let bounds: Vec<_> = drawn
+                    .shapes
+                    .iter()
+                    .map(|shape| board_bounds(shape, &affine))
+                    .collect();
+                origin.tied_net_keys = ties.tied_nets(index, slice, &bounds);
             }
             for shape in drawn.shapes {
                 emitter.copper(&origin, slice, shape, affine.clone());

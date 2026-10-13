@@ -9,10 +9,13 @@ use super::geometry::{nm, origin, rotation_translation};
 use super::nets::net_key;
 use super::pads::{PadFrame, oval};
 use super::stack::CopperStack;
-use crate::pcb::{PcbDrillProperties, PcbFrontBackOptionalBool, PcbHoleShape, PcbPad, PcbVia};
+use crate::pcb::{
+    PcbDrillProperties, PcbFrontBackOptionalBool, PcbHoleShape, PcbPad, PcbPostMachiningProperties,
+    PcbVia,
+};
 use kicad_monkey_contracts::generated::materialization_document::{
     Affine2D, Backdrill, BindingSourceKind, BoardSide, Disk2d, HolePlating, HoleProtection,
-    NonNegativeNm, ProtectionState, Shape2d, SideProtection,
+    NonNegativeNm, PostMachining, PostMachiningMode, ProtectionState, Shape2d, SideProtection,
 };
 
 /// One hole before it becomes an operation.
@@ -104,7 +107,39 @@ fn facts(plating: HolePlating, layers: &[String], stack: &CopperStack) -> Option
         plating_thickness_nm: None,
         protection: None,
         backdrills: Vec::new(),
+        post_machining: Vec::new(),
+        castellated: None,
     })
+}
+
+/// Front and back counterbores and countersinks as authored. A size,
+/// depth, or angle that is zero or absent is unknown, as KiCad writes only
+/// positive ones.
+fn post_machining(
+    front: Option<&PcbPostMachiningProperties>,
+    back: Option<&PcbPostMachiningProperties>,
+) -> Vec<PostMachining> {
+    let positive = |value: Option<f64>| value.filter(|value| *value > 0.0);
+    [(BoardSide::Front, front), (BoardSide::Back, back)]
+        .into_iter()
+        .filter_map(|(side, machining)| {
+            let machining = machining?;
+            let mode = match machining.mode.as_str() {
+                "counterbore" => PostMachiningMode::Counterbore,
+                "countersink" => PostMachiningMode::Countersink,
+                _ => return None,
+            };
+            Some(PostMachining {
+                side,
+                mode,
+                diameter_nm: positive(machining.size)
+                    .map(|size| NonNegativeNm(i64::from(nm(size)))),
+                depth_nm: positive(machining.depth)
+                    .map(|depth| NonNegativeNm(i64::from(nm(depth)))),
+                angle_deg: positive(machining.angle),
+            })
+        })
+        .collect()
 }
 
 pub(crate) fn via_holes(
@@ -126,6 +161,10 @@ pub(crate) fn via_holes(
         };
         facts.protection = Some(via_protection(via));
         facts.backdrills = backdrills([via.backdrill.as_ref(), via.tertiary_drill.as_ref()], stack);
+        facts.post_machining = post_machining(
+            via.front_post_machining.as_ref(),
+            via.back_post_machining.as_ref(),
+        );
         holes.push(HoleSpec {
             origin: Origin::routed(BindingSourceKind::Via, uid, net_key(&via.net)),
             facts,
@@ -159,6 +198,12 @@ pub(crate) fn pad_hole(
     };
     let mut facts = facts(plating, &layers, stack)?;
     facts.backdrills = backdrills([pad.backdrill.as_ref(), pad.tertiary_drill.as_ref()], stack);
+    facts.post_machining = post_machining(
+        pad.front_post_machining.as_ref(),
+        pad.back_post_machining.as_ref(),
+    );
+    facts.castellated =
+        (pad.fabrication_property.as_deref() == Some("pad_prop_castellated")).then_some(true);
     let shape = match drill.shape {
         PcbHoleShape::Oval if (drill.width - height).abs() > 1e-9 => oval(drill.width, height),
         PcbHoleShape::Oval => round_hole(drill.width.min(height)),

@@ -198,6 +198,46 @@ pub struct Backdrill {
     )]
     pub until_slice_key: ::std::option::Option<::std::string::String>,
 }
+///Fold line of a flexible region, for 3D views; flat analyses ignore it.
+///
+/// <details><summary>JSON schema</summary>
+///
+/// ```json
+///{
+///  "description": "Fold line of a flexible region, for 3D views; flat analyses ignore it.",
+///  "type": "object",
+///  "required": [
+///    "angle_deg",
+///    "end_nm",
+///    "radius_nm",
+///    "start_nm"
+///  ],
+///  "properties": {
+///    "angle_deg": {
+///      "type": "number"
+///    },
+///    "end_nm": {
+///      "$ref": "#/$defs/NmPoint"
+///    },
+///    "radius_nm": {
+///      "$ref": "#/$defs/NonNegativeNm"
+///    },
+///    "start_nm": {
+///      "$ref": "#/$defs/NmPoint"
+///    }
+///  },
+///  "additionalProperties": false
+///}
+/// ```
+/// </details>
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct BendLine {
+    pub angle_deg: f64,
+    pub end_nm: NmPoint,
+    pub radius_nm: NonNegativeNm,
+    pub start_nm: NmPoint,
+}
 /**Links one operation to the KiCad object that produced it. Required for
 simulation and picking; geometry consumers may ignore it.*/
 ///
@@ -213,6 +253,14 @@ simulation and picking; geometry consumers may ignore it.*/
 ///    "source_uid"
 ///  ],
 ///  "properties": {
+///    "die_delay_ps": {
+///      "description": "Pad-to-die delay of the pad's pin, in picoseconds.",
+///      "type": "number"
+///    },
+///    "die_length_nm": {
+///      "description": "Pad-to-die length of the pad's pin.",
+///      "$ref": "#/$defs/NonNegativeNm"
+///    },
 ///    "net_key": {
 ///      "type": "string"
 ///    },
@@ -232,6 +280,13 @@ simulation and picking; geometry consumers may ignore it.*/
 ///    },
 ///    "source_uid": {
 ///      "type": "string"
+///    },
+///    "tied_net_keys": {
+///      "description": "Nets a net-tie bridge joins: the nets of the net-tie pads its copper\ntouches. The nets stay separate; consumers decide whether to join them.",
+///      "type": "array",
+///      "items": {
+///        "type": "string"
+///      }
 ///    }
 ///  },
 ///  "additionalProperties": false
@@ -241,6 +296,20 @@ simulation and picking; geometry consumers may ignore it.*/
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
 #[serde(deny_unknown_fields)]
 pub struct BindingEntry {
+    ///Pad-to-die delay of the pad's pin, in picoseconds.
+    #[serde(
+        default,
+        deserialize_with = "crate::deserialize_present_nonnull",
+        skip_serializing_if = "::std::option::Option::is_none"
+    )]
+    pub die_delay_ps: ::std::option::Option<f64>,
+    ///Pad-to-die length of the pad's pin.
+    #[serde(
+        default,
+        deserialize_with = "crate::deserialize_present_nonnull",
+        skip_serializing_if = "::std::option::Option::is_none"
+    )]
+    pub die_length_nm: ::std::option::Option<NonNegativeNm>,
     #[serde(
         default,
         deserialize_with = "crate::deserialize_present_nonnull",
@@ -262,6 +331,10 @@ pub struct BindingEntry {
     pub refdes: ::std::option::Option<::std::string::String>,
     pub source_kind: BindingSourceKind,
     pub source_uid: ::std::string::String,
+    /**Nets a net-tie bridge joins: the nets of the net-tie pads its copper
+    touches. The nets stay separate; consumers decide whether to join them.*/
+    #[serde(default, skip_serializing_if = "::std::vec::Vec::is_empty")]
+    pub tied_net_keys: ::std::vec::Vec<::std::string::String>,
 }
 ///`BindingSourceKind`
 ///
@@ -637,6 +710,8 @@ pub struct ChunkEntry {
 ///  "required": [
 ///    "affine",
 ///    "footprint",
+///    "jumper_groups",
+///    "net_tie_groups",
 ///    "refdes",
 ///    "side",
 ///    "source_uid"
@@ -654,6 +729,20 @@ pub struct ChunkEntry {
 ///    },
 ///    "footprint": {
 ///      "type": "string"
+///    },
+///    "jumper_groups": {
+///      "description": "Jumper pad groups, connected inside the part without board copper.",
+///      "type": "array",
+///      "items": {
+///        "$ref": "#/$defs/PadGroup"
+///      }
+///    },
+///    "net_tie_groups": {
+///      "description": "Net-tie pad groups: copper in the footprint may join these pads' nets.",
+///      "type": "array",
+///      "items": {
+///        "$ref": "#/$defs/PadGroup"
+///      }
 ///    },
 ///    "refdes": {
 ///      "type": "string"
@@ -687,6 +776,10 @@ pub struct Component {
     )]
     pub body_height_nm: ::std::option::Option<NonNegativeNm>,
     pub footprint: ::std::string::String,
+    ///Jumper pad groups, connected inside the part without board copper.
+    pub jumper_groups: ::std::vec::Vec<PadGroup>,
+    ///Net-tie pad groups: copper in the footprint may join these pads' nets.
+    pub net_tie_groups: ::std::vec::Vec<PadGroup>,
     pub refdes: ::std::string::String,
     pub side: BoardSide,
     pub source_uid: ::std::string::String,
@@ -847,12 +940,15 @@ impl ::std::convert::TryFrom<::std::string::String> for DiagnosticSeverity {
         value.parse()
     }
 }
-///`DiffPair`
+/**Two nets paired by KiCad's suffix rule: after any trailing digits and
+underscores, `+` or `P` marks the positive net and `-` or `N` the
+negative one, and both nets exist.*/
 ///
 /// <details><summary>JSON schema</summary>
 ///
 /// ```json
 ///{
+///  "description": "Two nets paired by KiCad's suffix rule: after any trailing digits and\nunderscores, `+` or `P` marks the positive net and `-` or `N` the\nnegative one, and both nets exist.",
 ///  "type": "object",
 ///  "required": [
 ///    "base_name",
@@ -934,6 +1030,7 @@ pub struct Disk2d {
 ///    "index",
 ///    "kind",
 ///    "plating",
+///    "post_machining",
 ///    "shape",
 ///    "start_slice_key"
 ///  ],
@@ -949,6 +1046,10 @@ pub struct Disk2d {
 ///    },
 ///    "bounds": {
 ///      "$ref": "#/$defs/NmBounds"
+///    },
+///    "castellated": {
+///      "description": "The hole belongs to a castellated pad, cut by the board edge in fabrication.",
+///      "type": "boolean"
 ///    },
 ///    "end_slice_key": {
 ///      "type": "string"
@@ -971,6 +1072,12 @@ pub struct Disk2d {
 ///    "plating_thickness_nm": {
 ///      "$ref": "#/$defs/NonNegativeNm"
 ///    },
+///    "post_machining": {
+///      "type": "array",
+///      "items": {
+///        "$ref": "#/$defs/PostMachining"
+///      }
+///    },
 ///    "protection": {
 ///      "$ref": "#/$defs/HoleProtection"
 ///    },
@@ -991,6 +1098,13 @@ pub struct HoleOperation {
     pub affine: Affine2D,
     pub backdrills: ::std::vec::Vec<Backdrill>,
     pub bounds: NmBounds,
+    ///The hole belongs to a castellated pad, cut by the board edge in fabrication.
+    #[serde(
+        default,
+        deserialize_with = "crate::deserialize_present_nonnull",
+        skip_serializing_if = "::std::option::Option::is_none"
+    )]
+    pub castellated: ::std::option::Option<bool>,
     pub end_slice_key: ::std::string::String,
     pub index: u32,
     #[serde(deserialize_with = "crate::materialization_contract::deserialize_hole_operation_kind")]
@@ -1008,6 +1122,7 @@ pub struct HoleOperation {
         skip_serializing_if = "::std::option::Option::is_none"
     )]
     pub plating_thickness_nm: ::std::option::Option<NonNegativeNm>,
+    pub post_machining: ::std::vec::Vec<PostMachining>,
     #[serde(
         default,
         deserialize_with = "crate::deserialize_present_nonnull",
@@ -1688,18 +1803,26 @@ pub struct MaterializationScope {
     pub slice_keys: ::std::vec::Vec<::std::string::String>,
     pub tile_size_nm: NonNegativeNm,
 }
-///`MaterializationSource`
+/**The board file, and the project file when one was given: net classes come
+only from the project.*/
 ///
 /// <details><summary>JSON schema</summary>
 ///
 /// ```json
 ///{
+///  "description": "The board file, and the project file when one was given: net classes come\nonly from the project.",
 ///  "type": "object",
 ///  "required": [
 ///    "sha256",
 ///    "source_bytes"
 ///  ],
 ///  "properties": {
+///    "project_bytes": {
+///      "type": "string"
+///    },
+///    "project_sha256": {
+///      "type": "string"
+///    },
 ///    "sha256": {
 ///      "type": "string"
 ///    },
@@ -1714,6 +1837,18 @@ pub struct MaterializationScope {
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
 #[serde(deny_unknown_fields)]
 pub struct MaterializationSource {
+    #[serde(
+        default,
+        deserialize_with = "crate::deserialize_present_nonnull",
+        skip_serializing_if = "::std::option::Option::is_none"
+    )]
+    pub project_bytes: ::std::option::Option<::std::string::String>,
+    #[serde(
+        default,
+        deserialize_with = "crate::deserialize_present_nonnull",
+        skip_serializing_if = "::std::option::Option::is_none"
+    )]
+    pub project_sha256: ::std::option::Option<::std::string::String>,
     pub sha256: ::std::string::String,
     pub source_bytes: ::std::string::String,
 }
@@ -1756,25 +1891,46 @@ pub struct Net {
     )]
     pub net_class: ::std::option::Option<::std::string::String>,
 }
-///Design rules of one KiCad net class, as the project defines them.
+/**Effective design rules of a KiCad net class. A net matched by several
+classes gets a composite class: `constituents` are the matched classes by
+priority, with `Default` last when it supplied a value, `name` joins them
+with commas, and each rule comes from the first constituent that sets it.
+A single class lists only itself.*/
 ///
 /// <details><summary>JSON schema</summary>
 ///
 /// ```json
 ///{
-///  "description": "Design rules of one KiCad net class, as the project defines them.",
+///  "description": "Effective design rules of a KiCad net class. A net matched by several\nclasses gets a composite class: `constituents` are the matched classes by\npriority, with `Default` last when it supplied a value, `name` joins them\nwith commas, and each rule comes from the first constituent that sets it.\nA single class lists only itself.",
 ///  "type": "object",
 ///  "required": [
+///    "constituents",
 ///    "name"
 ///  ],
 ///  "properties": {
 ///    "clearance_nm": {
 ///      "$ref": "#/$defs/NonNegativeNm"
 ///    },
+///    "constituents": {
+///      "type": "array",
+///      "items": {
+///        "type": "string"
+///      },
+///      "minItems": 1
+///    },
 ///    "diff_pair_gap_nm": {
 ///      "$ref": "#/$defs/NonNegativeNm"
 ///    },
+///    "diff_pair_via_gap_nm": {
+///      "$ref": "#/$defs/NonNegativeNm"
+///    },
 ///    "diff_pair_width_nm": {
+///      "$ref": "#/$defs/NonNegativeNm"
+///    },
+///    "microvia_diameter_nm": {
+///      "$ref": "#/$defs/NonNegativeNm"
+///    },
+///    "microvia_drill_nm": {
 ///      "$ref": "#/$defs/NonNegativeNm"
 ///    },
 ///    "name": {
@@ -1803,6 +1959,7 @@ pub struct NetClass {
         skip_serializing_if = "::std::option::Option::is_none"
     )]
     pub clearance_nm: ::std::option::Option<NonNegativeNm>,
+    pub constituents: ::std::vec::Vec<::std::string::String>,
     #[serde(
         default,
         deserialize_with = "crate::deserialize_present_nonnull",
@@ -1814,7 +1971,25 @@ pub struct NetClass {
         deserialize_with = "crate::deserialize_present_nonnull",
         skip_serializing_if = "::std::option::Option::is_none"
     )]
+    pub diff_pair_via_gap_nm: ::std::option::Option<NonNegativeNm>,
+    #[serde(
+        default,
+        deserialize_with = "crate::deserialize_present_nonnull",
+        skip_serializing_if = "::std::option::Option::is_none"
+    )]
     pub diff_pair_width_nm: ::std::option::Option<NonNegativeNm>,
+    #[serde(
+        default,
+        deserialize_with = "crate::deserialize_present_nonnull",
+        skip_serializing_if = "::std::option::Option::is_none"
+    )]
+    pub microvia_diameter_nm: ::std::option::Option<NonNegativeNm>,
+    #[serde(
+        default,
+        deserialize_with = "crate::deserialize_present_nonnull",
+        skip_serializing_if = "::std::option::Option::is_none"
+    )]
+    pub microvia_drill_nm: ::std::option::Option<NonNegativeNm>,
     pub name: ::std::string::String,
     #[serde(
         default,
@@ -2020,6 +2195,35 @@ impl ::std::fmt::Display for NonNegativeNm {
     fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
         self.0.fmt(f)
     }
+}
+///Pad numbers of one footprint that KiCad connects as a group.
+///
+/// <details><summary>JSON schema</summary>
+///
+/// ```json
+///{
+///  "description": "Pad numbers of one footprint that KiCad connects as a group.",
+///  "type": "object",
+///  "required": [
+///    "pad_numbers"
+///  ],
+///  "properties": {
+///    "pad_numbers": {
+///      "type": "array",
+///      "items": {
+///        "type": "string"
+///      },
+///      "minItems": 1
+///    }
+///  },
+///  "additionalProperties": false
+///}
+/// ```
+/// </details>
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct PadGroup {
+    pub pad_numbers: ::std::vec::Vec<::std::string::String>,
 }
 ///`PathCap`
 ///
@@ -2248,6 +2452,137 @@ pub struct PlanarRegion2d {
     )]
     pub kind: ::std::string::String,
     pub outer: Contour,
+}
+/**Counterbore or countersink machined from one side. A countersink's
+`angle_deg` is the full included cone angle. Without `depth_nm`, a
+countersink runs to its cone apex.*/
+///
+/// <details><summary>JSON schema</summary>
+///
+/// ```json
+///{
+///  "description": "Counterbore or countersink machined from one side. A countersink's\n`angle_deg` is the full included cone angle. Without `depth_nm`, a\ncountersink runs to its cone apex.",
+///  "type": "object",
+///  "required": [
+///    "mode",
+///    "side"
+///  ],
+///  "properties": {
+///    "angle_deg": {
+///      "type": "number"
+///    },
+///    "depth_nm": {
+///      "$ref": "#/$defs/NonNegativeNm"
+///    },
+///    "diameter_nm": {
+///      "$ref": "#/$defs/NonNegativeNm"
+///    },
+///    "mode": {
+///      "$ref": "#/$defs/PostMachiningMode"
+///    },
+///    "side": {
+///      "$ref": "#/$defs/BoardSide"
+///    }
+///  },
+///  "additionalProperties": false
+///}
+/// ```
+/// </details>
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct PostMachining {
+    #[serde(
+        default,
+        deserialize_with = "crate::deserialize_present_nonnull",
+        skip_serializing_if = "::std::option::Option::is_none"
+    )]
+    pub angle_deg: ::std::option::Option<f64>,
+    #[serde(
+        default,
+        deserialize_with = "crate::deserialize_present_nonnull",
+        skip_serializing_if = "::std::option::Option::is_none"
+    )]
+    pub depth_nm: ::std::option::Option<NonNegativeNm>,
+    #[serde(
+        default,
+        deserialize_with = "crate::deserialize_present_nonnull",
+        skip_serializing_if = "::std::option::Option::is_none"
+    )]
+    pub diameter_nm: ::std::option::Option<NonNegativeNm>,
+    pub mode: PostMachiningMode,
+    pub side: BoardSide,
+}
+///`PostMachiningMode`
+///
+/// <details><summary>JSON schema</summary>
+///
+/// ```json
+///{
+///  "type": "string",
+///  "enum": [
+///    "counterbore",
+///    "countersink"
+///  ]
+///}
+/// ```
+/// </details>
+#[derive(
+    ::serde::Deserialize,
+    ::serde::Serialize,
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd,
+)]
+pub enum PostMachiningMode {
+    #[serde(rename = "counterbore")]
+    Counterbore,
+    #[serde(rename = "countersink")]
+    Countersink,
+}
+impl ::std::fmt::Display for PostMachiningMode {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        match *self {
+            Self::Counterbore => f.write_str("counterbore"),
+            Self::Countersink => f.write_str("countersink"),
+        }
+    }
+}
+impl ::std::str::FromStr for PostMachiningMode {
+    type Err = self::error::ConversionError;
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+        match value {
+            "counterbore" => Ok(Self::Counterbore),
+            "countersink" => Ok(Self::Countersink),
+            _ => Err("invalid value".into()),
+        }
+    }
+}
+impl ::std::convert::TryFrom<&str> for PostMachiningMode {
+    type Error = self::error::ConversionError;
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+impl ::std::convert::TryFrom<&::std::string::String> for PostMachiningMode {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: &::std::string::String,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+impl ::std::convert::TryFrom<::std::string::String> for PostMachiningMode {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: ::std::string::String,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
 }
 ///KiCad's tri-state for a protection option: set, cleared, or left to the board default.
 ///
@@ -2629,19 +2964,24 @@ pub struct SideProtection {
     pub plugged: ProtectionState,
     pub tented: ProtectionState,
 }
-///`SliceRole`
+/**Physical role of a slice. `coverlay`, `adhesive`, and `stiffener` occur
+only in flexible or stiffened stack regions.*/
 ///
 /// <details><summary>JSON schema</summary>
 ///
 /// ```json
 ///{
+///  "description": "Physical role of a slice. `coverlay`, `adhesive`, and `stiffener` occur\nonly in flexible or stiffened stack regions.",
 ///  "type": "string",
 ///  "enum": [
 ///    "conductor",
 ///    "dielectric",
 ///    "solder_mask",
 ///    "paste",
-///    "silkscreen"
+///    "silkscreen",
+///    "coverlay",
+///    "adhesive",
+///    "stiffener"
 ///  ]
 ///}
 /// ```
@@ -2669,6 +3009,12 @@ pub enum SliceRole {
     Paste,
     #[serde(rename = "silkscreen")]
     Silkscreen,
+    #[serde(rename = "coverlay")]
+    Coverlay,
+    #[serde(rename = "adhesive")]
+    Adhesive,
+    #[serde(rename = "stiffener")]
+    Stiffener,
 }
 impl ::std::fmt::Display for SliceRole {
     fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
@@ -2678,6 +3024,9 @@ impl ::std::fmt::Display for SliceRole {
             Self::SolderMask => f.write_str("solder_mask"),
             Self::Paste => f.write_str("paste"),
             Self::Silkscreen => f.write_str("silkscreen"),
+            Self::Coverlay => f.write_str("coverlay"),
+            Self::Adhesive => f.write_str("adhesive"),
+            Self::Stiffener => f.write_str("stiffener"),
         }
     }
 }
@@ -2690,6 +3039,9 @@ impl ::std::str::FromStr for SliceRole {
             "solder_mask" => Ok(Self::SolderMask),
             "paste" => Ok(Self::Paste),
             "silkscreen" => Ok(Self::Silkscreen),
+            "coverlay" => Ok(Self::Coverlay),
+            "adhesive" => Ok(Self::Adhesive),
+            "stiffener" => Ok(Self::Stiffener),
             _ => Err("invalid value".into()),
         }
     }
@@ -2724,6 +3076,7 @@ impl ::std::convert::TryFrom<::std::string::String> for SliceRole {
 ///{
 ///  "type": "object",
 ///  "required": [
+///    "regions",
 ///    "slices"
 ///  ],
 ///  "properties": {
@@ -2732,6 +3085,21 @@ impl ::std::convert::TryFrom<::std::string::String> for SliceRole {
 ///    },
 ///    "copper_finish": {
 ///      "type": "string"
+///    },
+///    "edge_plating": {
+///      "description": "KiCad's board-level plated-edge flag (`edge_plating`). KiCad stores no\nplated-edge geometry; fabrication plates the profile.",
+///      "type": "boolean"
+///    },
+///    "impedance_controlled": {
+///      "description": "KiCad's board-level impedance-control flag (`dielectric_constraints`).",
+///      "type": "boolean"
+///    },
+///    "regions": {
+///      "type": "array",
+///      "items": {
+///        "$ref": "#/$defs/StackRegion"
+///      },
+///      "minItems": 1
 ///    },
 ///    "slices": {
 ///      "type": "array",
@@ -2759,7 +3127,153 @@ pub struct Stack {
         skip_serializing_if = "::std::option::Option::is_none"
     )]
     pub copper_finish: ::std::option::Option<::std::string::String>,
+    /**KiCad's board-level plated-edge flag (`edge_plating`). KiCad stores no
+    plated-edge geometry; fabrication plates the profile.*/
+    #[serde(
+        default,
+        deserialize_with = "crate::deserialize_present_nonnull",
+        skip_serializing_if = "::std::option::Option::is_none"
+    )]
+    pub edge_plating: ::std::option::Option<bool>,
+    ///KiCad's board-level impedance-control flag (`dielectric_constraints`).
+    #[serde(
+        default,
+        deserialize_with = "crate::deserialize_present_nonnull",
+        skip_serializing_if = "::std::option::Option::is_none"
+    )]
+    pub impedance_controlled: ::std::option::Option<bool>,
+    pub regions: ::std::vec::Vec<StackRegion>,
     pub slices: ::std::vec::Vec<StackSlice>,
+}
+/**Part of the board with its own build-up. `slice_keys` lists the slices
+present there in stack order. A slice that only one region lists exists
+only in that region. Without `boundary` the region is the whole board
+profile. A rigid board has exactly one rigid region holding every slice.*/
+///
+/// <details><summary>JSON schema</summary>
+///
+/// ```json
+///{
+///  "description": "Part of the board with its own build-up. `slice_keys` lists the slices\npresent there in stack order. A slice that only one region lists exists\nonly in that region. Without `boundary` the region is the whole board\nprofile. A rigid board has exactly one rigid region holding every slice.",
+///  "type": "object",
+///  "required": [
+///    "bend_lines",
+///    "key",
+///    "kind",
+///    "slice_keys"
+///  ],
+///  "properties": {
+///    "bend_lines": {
+///      "type": "array",
+///      "items": {
+///        "$ref": "#/$defs/BendLine"
+///      }
+///    },
+///    "boundary": {
+///      "type": "array",
+///      "items": {
+///        "$ref": "#/$defs/PlanarRegion2d"
+///      }
+///    },
+///    "key": {
+///      "type": "string"
+///    },
+///    "kind": {
+///      "$ref": "#/$defs/StackRegionKind"
+///    },
+///    "slice_keys": {
+///      "type": "array",
+///      "items": {
+///        "type": "string"
+///      },
+///      "minItems": 1
+///    }
+///  },
+///  "additionalProperties": false
+///}
+/// ```
+/// </details>
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct StackRegion {
+    pub bend_lines: ::std::vec::Vec<BendLine>,
+    #[serde(default, skip_serializing_if = "::std::vec::Vec::is_empty")]
+    pub boundary: ::std::vec::Vec<PlanarRegion2d>,
+    pub key: ::std::string::String,
+    pub kind: StackRegionKind,
+    pub slice_keys: ::std::vec::Vec<::std::string::String>,
+}
+///`StackRegionKind`
+///
+/// <details><summary>JSON schema</summary>
+///
+/// ```json
+///{
+///  "type": "string",
+///  "enum": [
+///    "rigid",
+///    "flex"
+///  ]
+///}
+/// ```
+/// </details>
+#[derive(
+    ::serde::Deserialize,
+    ::serde::Serialize,
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd,
+)]
+pub enum StackRegionKind {
+    #[serde(rename = "rigid")]
+    Rigid,
+    #[serde(rename = "flex")]
+    Flex,
+}
+impl ::std::fmt::Display for StackRegionKind {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        match *self {
+            Self::Rigid => f.write_str("rigid"),
+            Self::Flex => f.write_str("flex"),
+        }
+    }
+}
+impl ::std::str::FromStr for StackRegionKind {
+    type Err = self::error::ConversionError;
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+        match value {
+            "rigid" => Ok(Self::Rigid),
+            "flex" => Ok(Self::Flex),
+            _ => Err("invalid value".into()),
+        }
+    }
+}
+impl ::std::convert::TryFrom<&str> for StackRegionKind {
+    type Error = self::error::ConversionError;
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+impl ::std::convert::TryFrom<&::std::string::String> for StackRegionKind {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: &::std::string::String,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+impl ::std::convert::TryFrom<::std::string::String> for StackRegionKind {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: ::std::string::String,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
 }
 /**One physical slice of the rigid board stack. `order` is zero at the front
 outermost slice and increases toward the back. Z positions are derived

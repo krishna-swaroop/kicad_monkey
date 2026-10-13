@@ -41,7 +41,20 @@ pub struct PreparedBoard {
 impl PreparedBoard {
     /// Decode `source` and emit every product.
     pub fn prepare(source: &str, limits: &PrepareLimits) -> Result<Self, MaterializationError> {
-        if u64::try_from(source.len()).map_or(true, |length| length > limits.max_source_bytes) {
+        Self::prepare_project(source, None, limits)
+    }
+
+    /// [`Self::prepare`] with the board's `.kicad_pro` project file, which
+    /// supplies net classes. `max_source_bytes` bounds both files together.
+    pub fn prepare_project(
+        source: &str,
+        project: Option<&str>,
+        limits: &PrepareLimits,
+    ) -> Result<Self, MaterializationError> {
+        let identity = SourceIdentity::of(source, project);
+        if u64::try_from(identity.total_bytes())
+            .map_or(true, |length| length > limits.max_source_bytes)
+        {
             return Err(error(
                 "source_too_large",
                 format!(
@@ -50,14 +63,11 @@ impl PreparedBoard {
                 ),
             ));
         }
-        let complete = emit_board(source, &IMPLEMENTED, Some(limits.max_operations))?;
+        let complete = emit_board(source, project, &IMPLEMENTED, Some(limits.max_operations))?;
         if complete.emitter.overflowed {
             return Err(too_many_operations(limits.max_operations));
         }
-        Ok(Self {
-            identity: SourceIdentity::of(source),
-            complete,
-        })
+        Ok(Self { identity, complete })
     }
 
     /// The materialization `request` selects from this board.
@@ -65,7 +75,7 @@ impl PreparedBoard {
         &self,
         request: &MaterializationRequestA0,
     ) -> Result<MaterializationDocumentA0, MaterializationError> {
-        validate_request(self.identity.bytes, request)?;
+        validate_request(self.identity.total_bytes(), request)?;
         let scope = scope_from_request(request);
         assemble(
             selected(&self.complete, &scope),
@@ -101,6 +111,8 @@ pub(super) fn selected(emitted: &Emitted, scope: &MaterializationScope) -> Emitt
     let mut narrowed = Emitted {
         stack: emitted.stack.clone(),
         nets: emitted.nets.clone(),
+        net_classes: emitted.net_classes.clone(),
+        diff_pairs: emitted.diff_pairs.clone(),
         components: Vec::new(),
         emitter: Default::default(),
     };

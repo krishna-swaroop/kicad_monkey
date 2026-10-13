@@ -1,7 +1,8 @@
 //! Corpus gate for the analytic board materializer.
 //!
 //! Usage: `cargo run --release -p kicad-monkey-core --example
-//! materialization_gate -- BOARD.kicad_pcb [OUT.json]`
+//! materialization_gate -- BOARD.kicad_pcb [OUT.json]`. A `.kicad_pro` next
+//! to the board supplies its net classes.
 //!
 //! Materializes the complete board, validates it against the a0 contract,
 //! checks binding coverage and determinism, checks rule 2 (selective equals
@@ -9,11 +10,29 @@
 //! checks that a prepared board answers each scope exactly as a direct
 //! materialization does, and prints a JSON summary. With `OUT.json`, writes the complete document.
 
+use kicad_monkey_contracts::generated::materialization_document::MaterializationDocumentA0;
 use kicad_monkey_contracts::generated::materialization_request::MaterializationRequestA0;
 use kicad_monkey_contracts::materialization_contract::validate_materialization_document;
 use kicad_monkey_core::board_materialization::{
-    PrepareLimits, PreparedBoard, filter_document, materialize_board,
+    PrepareLimits, PreparedBoard, filter_document, materialize_project,
 };
+
+/// The board and, when one sits beside it, its project file.
+struct Input {
+    board: String,
+    project: Option<String>,
+}
+
+impl Input {
+    fn bytes(&self) -> usize {
+        self.board.len() + self.project.as_ref().map_or(0, String::len)
+    }
+
+    fn materialize(&self, request: &MaterializationRequestA0) -> MaterializationDocumentA0 {
+        materialize_project(&self.board, self.project.as_deref(), request)
+            .unwrap_or_else(|error| fail(&error.to_string()))
+    }
+}
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::time::Instant;
@@ -95,17 +114,18 @@ fn main() {
     let Some(path) = arguments.first() else {
         fail("usage: materialization_gate BOARD.kicad_pcb [OUT.json]");
     };
-    let source = std::fs::read_to_string(path).unwrap_or_else(|error| fail(&error.to_string()));
+    let board = std::fs::read_to_string(path).unwrap_or_else(|error| fail(&error.to_string()));
+    let project =
+        std::fs::read_to_string(std::path::Path::new(path).with_extension("kicad_pro")).ok();
+    let source = Input { board, project };
     let started = Instant::now();
-    let complete = materialize_board(&source, &request(&PRODUCTS, &[], source.len()))
-        .unwrap_or_else(|error| fail(&error.to_string()));
+    let complete = source.materialize(&request(&PRODUCTS, &[], source.bytes()));
     let elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
     validate_materialization_document(&complete).unwrap_or_else(|error| fail(&error.to_string()));
     if complete.binding.len() != complete.operations.len() {
         fail("binding does not cover every operation");
     }
-    let again = materialize_board(&source, &request(&PRODUCTS, &[], source.len()))
-        .unwrap_or_else(|error| fail(&error.to_string()));
+    let again = source.materialize(&request(&PRODUCTS, &[], source.bytes()));
     let text = serde_json::to_string(&complete).unwrap_or_else(|error| fail(&error.to_string()));
     if serde_json::to_string(&again).ok().as_deref() != Some(text.as_str()) {
         fail("output is not deterministic");
@@ -141,6 +161,9 @@ fn main() {
         "operations": complete.operations.len(),
         "chunks": complete.chunks.len(),
         "nets": complete.nets.len(),
+        "project": source.project.is_some(),
+        "net_classes": complete.net_classes.len(),
+        "diff_pairs": complete.diff_pairs.len(),
         "components": complete.components.len(),
         "slices": slice_keys,
         "shapes": shape_counts(&value),
@@ -199,22 +222,18 @@ struct Prepared {
 }
 
 /// Prepare the board once and check its complete answer.
-fn check_prepared(
-    source: &str,
-    complete: &kicad_monkey_contracts::generated::materialization_document::MaterializationDocumentA0,
-    text: &str,
-) -> Prepared {
+fn check_prepared(source: &Input, complete: &MaterializationDocumentA0, text: &str) -> Prepared {
     let started = Instant::now();
     let limits = PrepareLimits {
         max_source_bytes: u64::MAX,
         max_operations: 50_000_000,
     };
-    let board =
-        PreparedBoard::prepare(source, &limits).unwrap_or_else(|error| fail(&error.to_string()));
+    let board = PreparedBoard::prepare_project(&source.board, source.project.as_deref(), &limits)
+        .unwrap_or_else(|error| fail(&error.to_string()));
     let prepare_ms = started.elapsed().as_secs_f64() * 1000.0;
     let started = Instant::now();
     let answer = board
-        .materialize(&request(&PRODUCTS, &[], source.len()))
+        .materialize(&request(&PRODUCTS, &[], source.bytes()))
         .unwrap_or_else(|error| fail(&error.to_string()));
     let complete_ms = started.elapsed().as_secs_f64() * 1000.0;
     if answer.operations.len() != complete.operations.len()
@@ -233,8 +252,8 @@ fn check_prepared(
 /// result, and check the prepared board's answer, on as many threads as the
 /// machine offers.
 fn check_scopes(
-    source: &str,
-    complete: &kicad_monkey_contracts::generated::materialization_document::MaterializationDocumentA0,
+    source: &Input,
+    complete: &MaterializationDocumentA0,
     prepared: &PreparedBoard,
     scopes: &[(&'static [&'static str], Vec<String>)],
 ) {
@@ -248,9 +267,8 @@ fn check_scopes(
                     let Some((products, slices)) = scopes.get(index) else {
                         break;
                     };
-                    let request = request(products, slices, source.len());
-                    let selective = materialize_board(source, &request)
-                        .unwrap_or_else(|error| fail(&error.to_string()));
+                    let request = request(products, slices, source.bytes());
+                    let selective = source.materialize(&request);
                     let answer = prepared
                         .materialize(&request)
                         .unwrap_or_else(|error| fail(&error.to_string()));
@@ -269,10 +287,7 @@ fn check_scopes(
 }
 
 /// The complete document packs deterministically and reads back exactly.
-fn check_pack(
-    complete: &kicad_monkey_contracts::generated::materialization_document::MaterializationDocumentA0,
-    text: &str,
-) -> usize {
+fn check_pack(complete: &MaterializationDocumentA0, text: &str) -> usize {
     use kicad_monkey_materialization_pack::{PackLimits, PackReader, encode_pack};
     let bytes = encode_pack(complete).unwrap_or_else(|error| fail(&error.to_string()));
     if encode_pack(complete).ok().as_deref() != Some(bytes.as_slice()) {
@@ -292,8 +307,8 @@ fn check_pack(
 }
 
 fn check_rule_two(
-    complete: &kicad_monkey_contracts::generated::materialization_document::MaterializationDocumentA0,
-    selective: &kicad_monkey_contracts::generated::materialization_document::MaterializationDocumentA0,
+    complete: &MaterializationDocumentA0,
+    selective: &MaterializationDocumentA0,
     products: &[&str],
     key: &str,
 ) {

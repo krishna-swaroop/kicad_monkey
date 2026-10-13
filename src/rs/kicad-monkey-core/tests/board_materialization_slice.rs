@@ -45,7 +45,7 @@ fn example_operations() -> Value {
         {
             "kind": "hole", "index": 1, "plating": "plated",
             "start_slice_key": "copper.front", "end_slice_key": "copper.back",
-            "net_key": "GND", "backdrills": [],
+            "net_key": "GND", "backdrills": [], "post_machining": [],
             "shape": { "kind": "disk_2d", "center_nm": [0, 0], "radius_nm": 300_000 },
             "affine": affine(1.0, 0.0, 0.0, 1.0, 17_000_000, 8_000_000),
             "bounds": bounds(16_700_000, 7_700_000, 17_300_000, 8_300_000)
@@ -88,7 +88,9 @@ fn example_document() -> MaterializationDocumentA0 {
             slice("copper.front", "conductor", 1),
             slice("dielectric.core", "dielectric", 2),
             slice("copper.back", "conductor", 3)
-        ] },
+        ], "regions": [ { "key": "rigid", "kind": "rigid", "bend_lines": [],
+                          "slice_keys": ["mask.front", "copper.front", "dielectric.core",
+                                         "copper.back"] } ] },
         "nets": [ { "key": "", "name": "" }, { "key": "GND", "name": "GND" },
                   { "key": "VCC", "name": "VCC" } ],
         "net_classes": [], "diff_pairs": [], "components": [],
