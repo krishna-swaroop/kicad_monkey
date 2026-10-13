@@ -62,6 +62,11 @@ pub struct BoardTableRecord {
     /// Source cell rectangles retained for the all-layer viewport authority.
     pub cell_bounds_nm: Vec<[i64; 4]>,
     pub operations: Vec<BoardTableOperation>,
+    /// Indices into `operations` of grid separators KiCad does not draw: it
+    /// strokes only cells' normalized right and bottom edges
+    /// (`PCB_TABLE::DrawBorders`), so the far edge of a negative row height
+    /// or column width gets no line. Not part of the plot contract.
+    pub kicad_hidden_segments: Vec<usize>,
 }
 
 /// One board dimension operation. Stroke-font text and dimension geometry use
