@@ -26,6 +26,7 @@ mod layers;
 mod nets;
 mod pads;
 mod parallel;
+mod prepared;
 mod producer;
 mod profile;
 mod routing;
@@ -38,12 +39,13 @@ pub use kicad_monkey_contracts::materialization_contract::{
     chunk_operations, filter_document, operation_bounds, operation_net, operation_product,
     operation_slice, scope_from_request,
 };
+pub use prepared::{PrepareLimits, PreparedBoard};
 pub use sexpr_view::materialization_sexpr;
 
 use kicad_monkey_contracts::generated::materialization_document::{
     DiagnosticSeverity, MaterialOperation, MaterialProduct, MaterializationCoordinateSystem,
     MaterializationDiagnostic, MaterializationDocumentA0, MaterializationProducer,
-    MaterializationSource, PathSegment, Shape2d, Stack,
+    MaterializationScope, MaterializationSource, PathSegment, Shape2d, Stack,
 };
 use kicad_monkey_contracts::generated::materialization_request::MaterializationRequestA0;
 use sha2::{Digest, Sha256};
@@ -92,16 +94,32 @@ const IMPLEMENTED: [MaterialProduct; 7] = [
     MaterialProduct::Components,
 ];
 
+/// Identity of a source, recorded in every document made from it.
+struct SourceIdentity {
+    sha256: String,
+    bytes: usize,
+}
+
+impl SourceIdentity {
+    fn of(source: &str) -> Self {
+        Self {
+            sha256: sha256_hex(source.as_bytes()),
+            bytes: source.len(),
+        }
+    }
+}
+
 /// Materialize one board source for `request`. The result is valid against
 /// the a0 contract and equals the complete materialization filtered by the
-/// request's scope.
+/// request's scope. Callers with several requests for one board use
+/// [`PreparedBoard`], which decodes and emits it once.
 pub fn materialize_board(
     source: &str,
     request: &MaterializationRequestA0,
 ) -> Result<MaterializationDocumentA0, MaterializationError> {
-    validate_request(source, request)?;
+    validate_request(source.len(), request)?;
     let scope = scope_from_request(request);
-    let limit = usize::try_from(request.max_operations).unwrap_or(usize::MAX);
+    let limit = operation_limit(request);
     // Products are pushed down into emission, so without slice, net, or
     // region filters the emitted count is the result count, and emission can
     // stop as soon as it passes the limit.
@@ -109,6 +127,32 @@ pub fn materialize_board(
         scope.slice_keys.is_empty() && scope.net_keys.is_empty() && scope.region.is_none();
     let emitted = producer::emit_board(source, &scope.products, unfiltered.then_some(limit))?;
     if emitted.emitter.overflowed {
+        return Err(too_many_operations(limit));
+    }
+    // Emission already holds exactly the requested products, so only slice,
+    // net, and region filters need a selection pass (rule 2 checks this).
+    let emitted = if unfiltered {
+        emitted
+    } else {
+        prepared::selected(&emitted, &scope)
+    };
+    assemble(emitted, &SourceIdentity::of(source), &scope, request)
+}
+
+fn operation_limit(request: &MaterializationRequestA0) -> usize {
+    usize::try_from(request.max_operations).unwrap_or(usize::MAX)
+}
+
+/// Chunk the operations `scope` selected, in emission order, into the
+/// request's document, and enforce its result limits.
+fn assemble(
+    emitted: producer::Emitted,
+    identity: &SourceIdentity,
+    scope: &MaterializationScope,
+    request: &MaterializationRequestA0,
+) -> Result<MaterializationDocumentA0, MaterializationError> {
+    let limit = operation_limit(request);
+    if emitted.emitter.operations.len() > limit {
         return Err(too_many_operations(limit));
     }
     let mut diagnostics = emitted.emitter.diagnostics;
@@ -132,23 +176,13 @@ pub fn materialize_board(
         .map(|slice| (slice.key.clone(), slice.order))
         .collect();
     let chunked = chunk_operations(emitted.emitter.operations, &order, *scope.tile_size_nm);
-    let mut document = empty_document(source, request, diagnostics);
+    let mut document = empty_document(identity, scope.clone(), diagnostics);
     document.stack = emitted.stack;
     document.nets = emitted.nets;
     document.components = emitted.components;
     document.binding = remap_binding(emitted.emitter.binding, &chunked.new_index_of_input);
     document.operations = chunked.operations;
     document.chunks = chunked.chunks;
-    // Emission already holds exactly the requested products, so only slice,
-    // net, and region filters need the filter pass (rule 2 checks this).
-    let document = if unfiltered {
-        document
-    } else {
-        filter_document(&document, &scope)
-    };
-    if document.operations.len() > limit {
-        return Err(too_many_operations(limit));
-    }
     let points: u64 = document.operations.iter().map(operation_points).sum();
     if points > u64::from(request.max_points) {
         return Err(error(
@@ -211,7 +245,7 @@ fn remap_binding(
 }
 
 fn validate_request(
-    source: &str,
+    source_bytes: usize,
     request: &MaterializationRequestA0,
 ) -> Result<(), MaterializationError> {
     if request.type_ != MATERIALIZATION_REQUEST_TYPE || request.version != "a0" {
@@ -244,7 +278,7 @@ fn validate_request(
         .then(|| digits.parse().ok())
         .flatten()
         .ok_or_else(|| error("invalid_limit", "max_source_bytes is a decimal uint64"))?;
-    if u64::try_from(source.len()).map_or(true, |length| length > limit) {
+    if u64::try_from(source_bytes).map_or(true, |length| length > limit) {
         return Err(error(
             "source_too_large",
             format!("source exceeds max_source_bytes ({limit})"),
@@ -254,8 +288,8 @@ fn validate_request(
 }
 
 fn empty_document(
-    source: &str,
-    request: &MaterializationRequestA0,
+    identity: &SourceIdentity,
+    scope: MaterializationScope,
     diagnostics: Vec<MaterializationDiagnostic>,
 ) -> MaterializationDocumentA0 {
     MaterializationDocumentA0 {
@@ -267,15 +301,15 @@ fn empty_document(
             version: crate::ENGINE_VERSION.to_owned(),
         },
         source: MaterializationSource {
-            sha256: sha256_hex(source.as_bytes()),
-            source_bytes: source.len().to_string(),
+            sha256: identity.sha256.clone(),
+            source_bytes: identity.bytes.to_string(),
         },
         coordinate_system: MaterializationCoordinateSystem {
             unit: "nm".to_owned(),
             x_axis: "board_right".to_owned(),
             y_axis: "board_down".to_owned(),
         },
-        scope: scope_from_request(request),
+        scope,
         stack: Stack {
             slices: Vec::new(),
             board_thickness_nm: None,

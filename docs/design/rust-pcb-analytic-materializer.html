@@ -54,8 +54,9 @@
         <td><code>kicad-monkey-core/src/board_materialization/</code>, a
           sibling of <code>board_plotter_ir/</code></td>
         <td>Resolves physical intent from <code>PcbView</code> and the
-          project file. Emits operations. Pushes the request's scope down
-          into <code>PcbSelection</code>. Stays dependency-free and
+          project file. Emits operations, with the request's products
+          pushed down into emission. A prepared board serves many
+          requests from one emission. Stays dependency-free and
           transport-neutral, as core requires.</td></tr>
       <tr><td>Packed encoding</td>
         <td>A new thin crate, <code>src/rs/kicad-monkey-materialization-pack</code></td>
@@ -202,9 +203,8 @@
       <tr><td>Placement</td><td><code>footprint_transforms()</code></td>
         <td>Composed affines and component records.</td></tr>
       <tr><td>Selective reads</td><td><code>PcbSelection</code></td>
-        <td>Request-scope pushdown, in slice 5. Until then the producer
-          reads one fixed family selection and filters after
-          emission.</td></tr>
+        <td>One fixed family selection. Slice 5 measured pushdown here
+          and dropped it (see Slice 5).</td></tr>
       <tr><td>Net classes</td><td>The project reader (<code>.kicad_pro</code>
         net settings)</td><td>Class resolution, rules, and differential
         pairing.</td></tr>
@@ -979,11 +979,49 @@
       67 s.</li>
   </ul>
   <p>Done in slice 5 since: the packed column writer and reader (see
-  Packed encoding). Still to do:</p>
+  Packed encoding), and the prepared board below. Slice 5 is complete.</p>
+  <p><strong>Prepared board.</strong> <code>PreparedBoard::prepare</code>
+  decodes a board and emits every product once, under its own source-size
+  and operation limits. <code>PreparedBoard::materialize</code> then
+  answers a request by keeping the operations its scope selects, in
+  emission order, and chunking them with the request's tile size.</p>
   <ul>
-    <li>a prepared-board API that keeps decoding across requests;</li>
-    <li>scope pushdown into <code>PcbSelection</code>.</li>
+    <li><strong>Same answer.</strong> For every request the result,
+      document or error, equals <code>materialize_board</code>'s. The only
+      difference is that source errors surface once, from
+      <code>prepare</code>. Rule 2 is what makes this hold.</li>
+    <li><strong>Shared filter.</strong> The scope filter is
+      <code>ScopeFilter</code> in the contracts crate, shared with
+      <code>filter_document</code>.</li>
+    <li><strong>One chunking pass.</strong> Filtered direct requests now
+      select from the emission and chunk once. Before, they chunked
+      twice, around a cloned complete document.</li>
+    <li><strong>Cost.</strong> A prepared board holds the complete
+      emission in memory. It is <code>Send</code> and
+      <code>Sync</code>, so threads share one.</li>
+    <li><strong>Speed.</strong> On JTYU-OBC, preparing takes 0.62 s and a
+      complete answer 57 ms, against 0.65 s for a direct call. Smaller
+      scopes are faster.</li>
+    <li><strong>Gate.</strong> The gate checks the prepared answer
+      against the direct one for every rule-2 scope. The OBC gate now
+      takes 35 s.</li>
   </ul>
+  <p><strong>Scope pushdown into <code>PcbSelection</code>: measured and
+  dropped.</strong> The structural scan behind
+  <code>PcbView::parse_selected</code> costs the same 104 ms on OBC
+  whether every family is selected or only the hole families. Once
+  products are pushed into emission, every family the producer still
+  decodes for a product-only request is needed:</p>
+  <ul>
+    <li>the net table reads net references from routing, pads, and
+      zones;</li>
+    <li>zone diagnostics belong to no product, so all of them appear in
+      every result.</li>
+  </ul>
+  <p>Zones are the largest of these, at 144 ms. Decoding them partially
+  would change those diagnostics and break rule 2. Requests for holes,
+  dielectric, or components alone take about 0.29 s on OBC; for repeated
+  requests, a prepared board is the faster route.</p>
 
   <h2>Porting from KiCad-Prism's analytic producer</h2>
   <p><code>prism-kicad-native</code> (<code>materialize.rs</code>,
@@ -1066,12 +1104,14 @@
           Net-tie bridges keep both nets in DC parity vectors. Plated-edge
           and post-machined holes match <code>kicad-cli</code> Gerber and
           drill output.</td></tr>
-      <tr><td>5. Packed encoding and pushdown</td>
-        <td>The columnar writer and reader, the chunk index, and scope
-          pushdown into <code>PcbSelection</code>.</td>
-        <td>Rule 3 holds. Selective reads decode only the selected
-          families. JTYU-OBC time and memory are compared with the Python
-          prototype's 6.98 s and 350 MB.</td></tr>
+      <tr><td>5. Packed encoding and serving</td>
+        <td>The columnar writer and reader, the chunk index, and a
+          prepared board that serves many requests from one emission.
+          Scope pushdown into <code>PcbSelection</code> was measured and
+          dropped.</td>
+        <td>Rule 3 holds. A prepared board's answers equal direct
+          materializations. JTYU-OBC time and memory are compared with
+          the Python prototype's 6.98 s and 350 MB.</td></tr>
       <tr><td>6. Consumers and platforms</td>
         <td>The KiCad-Prism viewer draws from the pack; this is the WebGPU
           analytic spike. The prism-sim-studio bundle builder reads it. CI

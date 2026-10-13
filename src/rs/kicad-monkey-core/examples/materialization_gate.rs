@@ -5,12 +5,15 @@
 //!
 //! Materializes the complete board, validates it against the a0 contract,
 //! checks binding coverage and determinism, checks rule 2 (selective equals
-//! filtered complete) for one scope per copper slice and per product, and
-//! prints a JSON summary. With `OUT.json`, writes the complete document.
+//! filtered complete) for one scope per copper slice and per product,
+//! checks that a prepared board answers each scope exactly as a direct
+//! materialization does, and prints a JSON summary. With `OUT.json`, writes the complete document.
 
 use kicad_monkey_contracts::generated::materialization_request::MaterializationRequestA0;
 use kicad_monkey_contracts::materialization_contract::validate_materialization_document;
-use kicad_monkey_core::board_materialization::{filter_document, materialize_board};
+use kicad_monkey_core::board_materialization::{
+    PrepareLimits, PreparedBoard, filter_document, materialize_board,
+};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::time::Instant;
@@ -121,7 +124,8 @@ fn main() {
     } else {
         Vec::new()
     };
-    check_scopes(&source, &complete, &scopes);
+    let prepared = check_prepared(&source, &complete, &text);
+    check_scopes(&source, &complete, &prepared.board, &scopes);
     let scopes = scopes.len();
     if let Some(out) = arguments.get(1) {
         std::fs::write(out, &text).unwrap_or_else(|error| fail(&error.to_string()));
@@ -142,6 +146,8 @@ fn main() {
         "shapes": shape_counts(&value),
         "diagnostics": diagnostics,
         "rule2_scopes_checked": scopes,
+        "prepare_ms": prepared.prepare_ms,
+        "prepared_complete_ms": prepared.complete_ms,
         "profile": profile_summary(&value),
         "materials": material_counts(&value),
         "json_bytes": text.len(),
@@ -186,11 +192,50 @@ fn rule_two_scopes(slice_keys: &[String]) -> Vec<(&'static [&'static str], Vec<S
     scopes
 }
 
-/// Materialize each scope, validate it, and check rule 2 against the
-/// complete result, on as many threads as the machine offers.
+struct Prepared {
+    board: PreparedBoard,
+    prepare_ms: f64,
+    complete_ms: f64,
+}
+
+/// Prepare the board once and check its complete answer.
+fn check_prepared(
+    source: &str,
+    complete: &kicad_monkey_contracts::generated::materialization_document::MaterializationDocumentA0,
+    text: &str,
+) -> Prepared {
+    let started = Instant::now();
+    let limits = PrepareLimits {
+        max_source_bytes: u64::MAX,
+        max_operations: 50_000_000,
+    };
+    let board =
+        PreparedBoard::prepare(source, &limits).unwrap_or_else(|error| fail(&error.to_string()));
+    let prepare_ms = started.elapsed().as_secs_f64() * 1000.0;
+    let started = Instant::now();
+    let answer = board
+        .materialize(&request(&PRODUCTS, &[], source.len()))
+        .unwrap_or_else(|error| fail(&error.to_string()));
+    let complete_ms = started.elapsed().as_secs_f64() * 1000.0;
+    if answer.operations.len() != complete.operations.len()
+        || serde_json::to_string(&answer).ok().as_deref() != Some(text)
+    {
+        fail("prepared complete document differs");
+    }
+    Prepared {
+        board,
+        prepare_ms,
+        complete_ms,
+    }
+}
+
+/// Materialize each scope, validate it, check rule 2 against the complete
+/// result, and check the prepared board's answer, on as many threads as the
+/// machine offers.
 fn check_scopes(
     source: &str,
     complete: &kicad_monkey_contracts::generated::materialization_document::MaterializationDocumentA0,
+    prepared: &PreparedBoard,
     scopes: &[(&'static [&'static str], Vec<String>)],
 ) {
     let workers = std::thread::available_parallelism().map_or(1, usize::from);
@@ -203,9 +248,15 @@ fn check_scopes(
                     let Some((products, slices)) = scopes.get(index) else {
                         break;
                     };
-                    let selective =
-                        materialize_board(source, &request(products, slices, source.len()))
-                            .unwrap_or_else(|error| fail(&error.to_string()));
+                    let request = request(products, slices, source.len());
+                    let selective = materialize_board(source, &request)
+                        .unwrap_or_else(|error| fail(&error.to_string()));
+                    let answer = prepared
+                        .materialize(&request)
+                        .unwrap_or_else(|error| fail(&error.to_string()));
+                    if serde_json::to_value(&answer).ok() != serde_json::to_value(&selective).ok() {
+                        fail(&format!("prepared differs for {products:?} on {slices:?}"));
+                    }
                     validate_materialization_document(&selective).unwrap_or_else(|error| {
                         fail(&format!("{products:?} on {slices:?}: {error}"))
                     });

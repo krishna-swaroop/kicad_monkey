@@ -82,7 +82,11 @@ fn document_bounds(bounds: &RequestBounds) -> NmBounds {
     }
 }
 
-struct Filter<'a> {
+/// The operations a scope keeps: its products, slices (a hole is kept when
+/// its span crosses a selected slice), nets, and region. This is the
+/// rule-2 filter, shared by [`filter_document`] and producers that select
+/// from a complete emission.
+pub struct ScopeFilter<'a> {
     products: BTreeSet<MaterialProduct>,
     slices: Option<BTreeSet<u32>>,
     nets: Option<BTreeSet<&'a str>>,
@@ -90,8 +94,28 @@ struct Filter<'a> {
     slice_order: &'a BTreeMap<String, u32>,
 }
 
-impl Filter<'_> {
-    fn keeps(&self, operation: &MaterialOperation) -> bool {
+impl<'a> ScopeFilter<'a> {
+    /// The filter for `scope` on a stack whose slice keys map to their
+    /// order in `slice_order`.
+    pub fn new(scope: &'a MaterializationScope, slice_order: &'a BTreeMap<String, u32>) -> Self {
+        Self {
+            products: scope.products.iter().copied().collect(),
+            slices: (!scope.slice_keys.is_empty()).then(|| {
+                scope
+                    .slice_keys
+                    .iter()
+                    .filter_map(|key| slice_order.get(key).copied())
+                    .collect()
+            }),
+            nets: (!scope.net_keys.is_empty())
+                .then(|| scope.net_keys.iter().map(String::as_str).collect()),
+            region: scope.region.as_ref(),
+            slice_order,
+        }
+    }
+
+    /// Whether the scope keeps `operation`.
+    pub fn keeps(&self, operation: &MaterialOperation) -> bool {
         self.products.contains(&operation_product(operation))
             && self.keeps_slice(operation)
             && self
@@ -101,6 +125,12 @@ impl Filter<'_> {
             && self
                 .region
                 .is_none_or(|region| intersects(region, operation_bounds(operation)))
+    }
+
+    /// Whether the scope keeps `product`'s component records and
+    /// diagnostics.
+    pub fn keeps_product(&self, product: MaterialProduct) -> bool {
+        self.products.contains(&product)
     }
 
     /// A surface keeps its own slice; a hole is kept when its span crosses
@@ -151,20 +181,7 @@ pub fn filter_document(
         .iter()
         .map(|slice| (slice.key.clone(), slice.order))
         .collect();
-    let filter = Filter {
-        products: scope.products.iter().copied().collect(),
-        slices: (!scope.slice_keys.is_empty()).then(|| {
-            scope
-                .slice_keys
-                .iter()
-                .filter_map(|key| slice_order.get(key).copied())
-                .collect()
-        }),
-        nets: (!scope.net_keys.is_empty())
-            .then(|| scope.net_keys.iter().map(String::as_str).collect()),
-        region: scope.region.as_ref(),
-        slice_order: &slice_order,
-    };
+    let filter = ScopeFilter::new(scope, &slice_order);
     let mut kept_inputs = Vec::new();
     let mut kept = Vec::new();
     for (input, operation) in complete.operations.iter().enumerate() {
@@ -182,13 +199,13 @@ pub fn filter_document(
     document.binding = remap_binding(&complete.binding, &new_index);
     document.operations = chunked.operations;
     document.chunks = chunked.chunks;
-    if !filter.products.contains(&MaterialProduct::Components) {
+    if !filter.keeps_product(MaterialProduct::Components) {
         document.components.clear();
     }
     document.diagnostics.retain(|diagnostic| {
         diagnostic
             .product
-            .is_none_or(|product| filter.products.contains(&product))
+            .is_none_or(|product| filter.keeps_product(product))
     });
     document.scope = canonical_scope(scope.clone());
     document

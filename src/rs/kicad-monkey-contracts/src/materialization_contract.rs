@@ -37,7 +37,7 @@ pub use chunking::{
     operation_slice,
 };
 use scope::{ALL_PRODUCTS, intersects};
-pub use scope::{canonical_scope, filter_document, scope_from_request};
+pub use scope::{ScopeFilter, canonical_scope, filter_document, scope_from_request};
 use shapes::{check_bounds_hold_shape, in_length_range, validate_shape};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
