@@ -40,6 +40,11 @@ pub mod kind {
     pub const ARC: u32 = 6;
 }
 
+/// The least tolerance of shape outlines, millimetres: a renderer finds the
+/// wall exactly by the shape's distance, so its skirt can sit this far out
+/// (and the renderer's ring over the gap must reach at least this far in).
+pub const OUTLINE_TOLERANCE_MM: f32 = 0.004;
+
 /// Contour edge flag: the edge bounds a subtracting region.
 pub const EDGE_SUBTRACT: u32 = 1 << 31;
 
@@ -605,7 +610,7 @@ impl Builder {
         out.shape_cuts = found.ranges[..shape_count * 2].to_vec();
         out.edge_cuts = found.ranges[shape_count * 2..].to_vec();
         out.cut_indices = found.indices;
-        let tolerance = (self.tolerance_nm / NM_PER_MM) as f32;
+        let tolerance = ((self.tolerance_nm / NM_PER_MM) as f32).max(OUTLINE_TOLERANCE_MM);
         for (index, record) in adds.as_chunks::<SHAPE_WORDS>().0.iter().enumerate() {
             for (x0, y0, x1, y1) in oriented_edges(&outline(record, tolerance), true) {
                 out.outline_edges.extend([x0, y0, x1, y1]);
