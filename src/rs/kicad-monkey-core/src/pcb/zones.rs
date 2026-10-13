@@ -55,10 +55,22 @@ pub struct PcbZoneLayerProperty {
     pub source_range: Range<usize>,
 }
 
+/// An authored zone outline. `points` is its vertex chain; an `(arc (start)
+/// (mid) (end))` element contributes its start and end vertices, and `arcs`
+/// marks the edges between them as arcs through `mid`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PcbZonePolygon {
     pub points: Vec<PcbPoint>,
+    pub arcs: Vec<PcbZoneOutlineArc>,
     pub source_range: Range<usize>,
+}
+
+/// The outline edge from `points[start_index]` to the next vertex is an arc
+/// through `mid`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PcbZoneOutlineArc {
+    pub start_index: usize,
+    pub mid: PcbPoint,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -250,8 +262,11 @@ fn zone_collections(
             }
             Some("polygon") => {
                 ensure_polygon_capacity(&result, limits)?;
+                let mut arcs = Vec::new();
+                let points = polygon_points(source, item, limits, &mut point_count, &mut arcs)?;
                 result.polygons.push(PcbZonePolygon {
-                    points: polygon_points(source, item, limits, &mut point_count)?,
+                    points,
+                    arcs,
                     source_range: item.range.clone(),
                 });
             }
@@ -268,6 +283,7 @@ fn zone_collections(
                         &item_children,
                         limits,
                         &mut point_count,
+                        None,
                     )?,
                     source_range: item.range.clone(),
                 });
@@ -435,16 +451,21 @@ fn polygon_points(
     polygon: &FormSpan,
     limits: PcbLimits,
     total: &mut usize,
+    arcs: &mut Vec<PcbZoneOutlineArc>,
 ) -> Result<Vec<PcbPoint>, Error> {
     let children = direct_children(source, polygon, limits.max_object_children, limits)?;
-    polygon_points_from_children(source, &children, limits, total)
+    polygon_points_from_children(source, &children, limits, total, Some(arcs))
 }
 
+/// Points of a `(pts ...)` list. Outlines (`arcs` given) may hold arc
+/// elements, as KiCad writes for rounded outlines; stored fills never do, so
+/// there anything but `xy` stays an error.
 fn polygon_points_from_children(
     source: &str,
     children: &[FormSpan],
     limits: PcbLimits,
     total: &mut usize,
+    mut arcs: Option<&mut Vec<PcbZoneOutlineArc>>,
 ) -> Result<Vec<PcbPoint>, Error> {
     let Some(points) = child(children, "pts") else {
         return Ok(Vec::new());
@@ -468,20 +489,65 @@ fn polygon_points_from_children(
     })?;
     let mut decoded = Vec::with_capacity(point_spans.len());
     for point in point_spans {
-        if point.head.as_deref() != Some("xy") {
-            return Err(source_error(
-                "Zone outline and filled-polygon readers currently require XY elements; arc or unknown elements are not omitted",
-                point.start,
-            ));
+        match (point.head.as_deref(), arcs.as_deref_mut()) {
+            (Some("xy"), _) => decoded.push(zone_point(
+                source,
+                &point,
+                ("Expected zone point x", "Expected zone point y"),
+            )?),
+            (Some("arc"), Some(arcs)) => {
+                let parts = direct_children(source, &point, 3, limits)?;
+                let part = |name: &str| {
+                    child(&parts, name).ok_or_else(|| {
+                        source_error("Expected zone outline arc start, mid and end", point.start)
+                    })
+                };
+                let start = zone_point(
+                    source,
+                    part("start")?,
+                    ("Expected zone arc start x", "Expected zone arc start y"),
+                )?;
+                let mid = zone_point(
+                    source,
+                    part("mid")?,
+                    ("Expected zone arc mid x", "Expected zone arc mid y"),
+                )?;
+                let end = zone_point(
+                    source,
+                    part("end")?,
+                    ("Expected zone arc end x", "Expected zone arc end y"),
+                )?;
+                if decoded.last() != Some(&start) {
+                    decoded.push(start);
+                }
+                arcs.push(PcbZoneOutlineArc {
+                    start_index: decoded.len() - 1,
+                    mid,
+                });
+                decoded.push(end);
+            }
+            _ => {
+                return Err(source_error(
+                    "Zone outlines hold XY and arc elements, and filled polygons only XY elements",
+                    point.start,
+                ));
+            }
         }
-        let values = bounded_scalar_values(source, &point, 2)?;
-        decoded.push(PcbPoint {
-            x: required_f64(values.first(), "Expected zone point x", &point)?,
-            y: required_f64(values.get(1), "Expected zone point y", &point)?,
-        });
     }
     *total += decoded.len();
     Ok(decoded)
+}
+
+fn zone_point(
+    source: &str,
+    point: &FormSpan,
+    messages: (&'static str, &'static str),
+) -> Result<PcbPoint, Error> {
+    let values = bounded_scalar_values(source, point, 2)?;
+    Ok(PcbPoint {
+        x: required_f64(values.first(), messages.0, point)?,
+        y: required_f64(values.get(1), messages.1, point)?,
+    })
 }
 
 /// The common `(pts (xy x y) ...)` read in one lexer pass, without a span or

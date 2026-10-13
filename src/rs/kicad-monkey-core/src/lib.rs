@@ -143,8 +143,8 @@ pub use pcb::{
     PcbResolvedPadCopperLayer, PcbRoutingArc, PcbSegment, PcbSelection, PcbSetup, PcbStackup,
     PcbStackupLayer, PcbStackupSublayer, PcbTable, PcbTableCell, PcbTeardropParameters, PcbVia,
     PcbViaStack, PcbViaStackLayer, PcbView, PcbZone, PcbZoneFilledPolygon, PcbZoneKeepout,
-    PcbZoneLayerConnections, PcbZoneLayerProperty, PcbZonePlacement, PcbZonePlacementSource,
-    PcbZonePolygon, resolve_pad_copper_layer,
+    PcbZoneLayerConnections, PcbZoneLayerProperty, PcbZoneOutlineArc, PcbZonePlacement,
+    PcbZonePlacementSource, PcbZonePolygon, resolve_pad_copper_layer,
 };
 pub use pcb_authoring::{
     AuthoredBackdrill, AuthoredBoardText, AuthoredChamferCorner, AuthoredColor,
