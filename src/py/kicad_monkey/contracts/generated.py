@@ -1698,6 +1698,7 @@ class StackSlice(Struct, forbid_unknown_fields=True, frozen=True):
     material_name: str | UnsetType = field(default=UNSET)
     relative_permittivity: float | UnsetType = field(default=UNSET)
     loss_tangent: float | UnsetType = field(default=UNSET)
+    dielectric_kind: DielectricKind | UnsetType = field(default=UNSET)
 
 
 class StackRegion(Struct, forbid_unknown_fields=True, frozen=True):
@@ -1760,6 +1761,9 @@ DiagnosticSeverity = Literal["info", "warning", "error"]
 
 
 SliceRole = Literal["conductor", "dielectric", "solder_mask", "paste", "silkscreen", "coverlay", "adhesive", "stiffener"]
+
+
+DielectricKind = Literal["core", "prepreg"]
 
 
 StackRegionKind = Literal["rigid", "flex"]
@@ -4286,6 +4290,7 @@ __all__ = (
     "BindingSourceKind",
     "DiagnosticSeverity",
     "SliceRole",
+    "DielectricKind",
     "StackRegionKind",
     "PlanarRegion2d",
     "BendLine",

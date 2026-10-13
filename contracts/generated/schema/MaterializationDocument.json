@@ -617,6 +617,10 @@
                 },
                 "loss_tangent": {
                     "type": "number"
+                },
+                "dielectric_kind": {
+                    "$ref": "#/$defs/DielectricKind",
+                    "description": "A dielectric's construction, when the stackup states it."
                 }
             },
             "required": [
@@ -904,6 +908,14 @@
                 "stiffener"
             ],
             "description": "Physical role of a slice. `coverlay`, `adhesive`, and `stiffener` occur\nonly in flexible or stiffened stack regions."
+        },
+        "DielectricKind": {
+            "type": "string",
+            "enum": [
+                "core",
+                "prepreg"
+            ],
+            "description": "How a dielectric slice is built: a cured `core` laminate or a `prepreg`\nbonding ply (KiCad's stackup layer `type`)."
         },
         "StackRegionKind": {
             "type": "string",

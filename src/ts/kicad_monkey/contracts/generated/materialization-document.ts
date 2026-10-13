@@ -178,6 +178,10 @@ export interface StackSlice {
   material_name?: string;
   relative_permittivity?: number;
   loss_tangent?: number;
+  /**
+   * A dielectric's construction, when the stackup states it.
+   */
+  dielectric_kind?: "core" | "prepreg";
 }
 /**
  * Part of the board with its own build-up. `slice_keys` lists the slices

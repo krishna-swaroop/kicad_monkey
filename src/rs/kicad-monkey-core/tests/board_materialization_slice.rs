@@ -3,7 +3,7 @@
 //! selective-equals-filtered oracle, and the request boundary.
 
 use kicad_monkey_contracts::generated::materialization_document::{
-    MaterialProduct, MaterializationDocumentA0, MaterializationScope, NonNegativeNm,
+    DielectricKind, MaterialProduct, MaterializationDocumentA0, MaterializationScope, NonNegativeNm,
 };
 use kicad_monkey_contracts::generated::materialization_request::MaterializationRequestA0;
 use kicad_monkey_contracts::materialization_contract::{
@@ -637,6 +637,7 @@ fn full_stack_comes_from_the_kicad_stackup() {
     let core = &document.stack.slices[4];
     assert_eq!(core.material_name.as_deref(), Some("FR4"));
     assert_eq!(core.relative_permittivity, Some(4.5));
+    assert_eq!(core.dielectric_kind, Some(DielectricKind::Core));
     assert_eq!(core.loss_tangent, Some(0.02));
     assert_eq!(document.stack.copper_finish.as_deref(), Some("ENIG"));
     assert_eq!(
@@ -706,13 +707,56 @@ fn via_protection_and_backdrill_are_carried_on_the_hole() {
         .expect("the via hole");
     assert_eq!(via["protection"]["front"]["tented"], "yes");
     assert_eq!(via["protection"]["back"]["tented"], "no");
-    assert_eq!(via["protection"]["front"]["covered"], "unspecified");
+    // Sides the via leaves unstated follow the board, here unprotected.
+    assert_eq!(via["protection"]["front"]["covered"], "no");
     assert_eq!(via["protection"]["filled"], "yes");
-    assert_eq!(via["protection"]["capped"], "unspecified");
+    assert_eq!(via["protection"]["capped"], "no");
     assert_eq!(
         via["backdrills"],
         json!([{ "side": "back", "diameter_nm": 600_000, "until_slice_key": "copper.front" }])
     );
+}
+
+#[test]
+fn a_vias_unstated_protection_follows_the_board() {
+    let board = STACKED
+        .replace("(version 20240108)", "(version 20250324)")
+        .replace(
+            "      (copper_finish \"ENIG\")))",
+            "      (copper_finish \"ENIG\"))\n    (tenting front) (covering (back yes)) (plugging front) (capping yes))",
+        )
+        .replace(
+            "    (tenting (front yes) (back no))\n    (filling yes)\n",
+            "    (plugging (back yes))\n",
+        );
+    assert_ne!(board, STACKED, "the fixture was rewritten");
+    let protection_of = |board: &str| {
+        let document = materialize_board(board, &request(&["holes"], "1048576")).expect("ok");
+        let value = serde_json::to_value(&document).expect("serialize");
+        value["operations"]
+            .as_array()
+            .and_then(|operations| operations.iter().find(|op| op["protection"].is_object()))
+            .expect("the via hole")["protection"]
+            .clone()
+    };
+    let protection = &protection_of(&board);
+    assert_eq!(protection["front"]["tented"], "yes");
+    assert_eq!(protection["back"]["tented"], "no");
+    assert_eq!(protection["front"]["covered"], "no");
+    assert_eq!(protection["back"]["covered"], "yes");
+    // The via states its back plug and leaves the front to the board.
+    assert_eq!(protection["front"]["plugged"], "yes");
+    assert_eq!(protection["back"]["plugged"], "yes");
+    assert_eq!(protection["filled"], "no");
+    assert_eq!(protection["capped"], "yes");
+    // Before format 20250228 an absent cover, plug, fill or cap is off;
+    // tenting still follows the board.
+    let older = protection_of(&board.replace("(version 20250324)", "(version 20250101)"));
+    assert_eq!(older["front"]["tented"], "yes");
+    assert_eq!(older["back"]["covered"], "no");
+    assert_eq!(older["front"]["plugged"], "no");
+    assert_eq!(older["back"]["plugged"], "yes");
+    assert_eq!(older["capped"], "no");
 }
 
 #[test]

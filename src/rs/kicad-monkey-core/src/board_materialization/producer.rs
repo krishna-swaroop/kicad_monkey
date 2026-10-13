@@ -5,7 +5,7 @@ use super::dielectric::dielectric_regions;
 use super::emit::{Emitter, Origin, source_uid};
 use super::flash::{FlashLayers, flash_layers, presentation_plot};
 use super::geometry::footprint_affine;
-use super::holes::{HoleSpec, pad_hole, via_holes};
+use super::holes::{HoleSpec, ViaDefaults, pad_hole, via_holes};
 use super::layers::board_stack;
 use super::machining::copper_knockouts;
 use super::net_classes::{NetClassSettings, assign_classes, diff_pairs};
@@ -296,7 +296,19 @@ fn emit_view(
         text.emit_copper(&copper, &mut emitter);
     }
     let regions = profile_regions(view, &sources, products, &mut emitter)?;
-    emit_drilled(&sources, &copper, &regions, &stack, products, &mut emitter);
+    let vias = ViaDefaults::from_setup(
+        setup.as_ref(),
+        view.metadata().map_or(0, |metadata| metadata.version),
+    );
+    emit_drilled(
+        &sources,
+        &vias,
+        &copper,
+        &regions,
+        &stack,
+        products,
+        &mut emitter,
+    );
     let board = Board {
         sources: &sources,
         setup: setup.as_ref(),
@@ -353,11 +365,12 @@ fn decode_and_emit_copper(
     if products.contains(&MaterialProduct::Copper) {
         emit_copper(view, &sources, copper, emitter)?;
         // Hole problems are reported by the holes product.
-        let holes = hole_specs(&sources, copper, &mut Emitter::default());
+        let version = view.metadata().map_or(0, |metadata| metadata.version);
+        let vias = ViaDefaults::from_setup(setup.as_ref(), version);
+        let holes = hole_specs(&sources, &vias, copper, &mut Emitter::default());
         emitter.product = Some(MaterialProduct::Copper);
         copper_knockouts(&holes, &stack, emitter);
         let names = NetNames::new(&collect(view.nets())?, &nets);
-        let version = view.metadata().map_or(0, |metadata| metadata.version);
         let ties = NetTies::new(&sources.footprints, &sources.pads, copper, version);
         copper_graphics(
             &graphics.0,
@@ -381,6 +394,7 @@ fn decode_and_emit_copper(
 /// Holes, and the dielectric they are cut from.
 fn emit_drilled(
     sources: &Sources,
+    vias: &ViaDefaults,
     copper: &CopperStack,
     regions: &[PlanarRegion2d],
     stack: &Stack,
@@ -394,7 +408,7 @@ fn emit_drilled(
     if !holes_wanted && !dielectric_wanted {
         return;
     }
-    let holes = hole_specs(sources, copper, emitter);
+    let holes = hole_specs(sources, vias, copper, emitter);
     if holes_wanted {
         emitter.product = Some(MaterialProduct::Holes);
         holes.iter().for_each(|hole| emitter.hole(hole));
@@ -451,10 +465,15 @@ fn emit_copper(
     Ok(())
 }
 
-fn hole_specs(sources: &Sources, copper: &CopperStack, emitter: &mut Emitter) -> Vec<HoleSpec> {
+fn hole_specs(
+    sources: &Sources,
+    vias: &ViaDefaults,
+    copper: &CopperStack,
+    emitter: &mut Emitter,
+) -> Vec<HoleSpec> {
     emitter.product = Some(MaterialProduct::Holes);
     let mut holes = Vec::new();
-    via_holes(&sources.vias, copper, &mut holes, emitter);
+    via_holes(&sources.vias, vias, copper, &mut holes, emitter);
     let flash = FlashLayers::default();
     let pads = Pads {
         copper,

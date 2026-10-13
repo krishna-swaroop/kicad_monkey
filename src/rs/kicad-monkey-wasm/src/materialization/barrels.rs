@@ -4,14 +4,15 @@
 //! millimetres (KiCad frame, y down).
 
 use kicad_monkey_contracts::generated::materialization_document::{
-    Affine2D, BoardSide, HoleOperation, HolePlating, NmPoint, Shape2d,
+    Affine2D, BoardSide, HoleOperation, HolePlating, NmPoint, ProtectionState, Shape2d,
 };
 
 /// Floats per barrel: centre x, centre y, half the straight length, the long
 /// axis' angle from +x (radians), radius, plating thickness, and two zeros.
 pub const BARREL_FLOATS: usize = 8;
 /// Words per barrel: operation index, start and end slice orders, the order a
-/// front and a back backdrill run until (`NONE` without), flags, two zeros.
+/// front and a back backdrill run until (`NONE` without), flags (`FLAG_*`),
+/// two zeros.
 pub const BARREL_WORDS: usize = 8;
 /// No backdrill from that side.
 pub const NONE: u32 = u32::MAX;
@@ -19,6 +20,18 @@ pub const NONE: u32 = u32::MAX;
 pub const FLAG_DEFAULT_PLATING: u32 = 1;
 /// Flag: an unplated hole (its plating is 0).
 pub const FLAG_UNPLATED: u32 = 2;
+
+/// Flags: the hole's IPC-4761 protection, as fabricated, per side (front,
+/// then back) and through it; and a castellated (edge) hole.
+pub const FLAG_TENTED_FRONT: u32 = 1 << 2;
+pub const FLAG_TENTED_BACK: u32 = 1 << 3;
+pub const FLAG_COVERED_FRONT: u32 = 1 << 4;
+pub const FLAG_COVERED_BACK: u32 = 1 << 5;
+pub const FLAG_PLUGGED_FRONT: u32 = 1 << 6;
+pub const FLAG_PLUGGED_BACK: u32 = 1 << 7;
+pub const FLAG_FILLED: u32 = 1 << 8;
+pub const FLAG_CAPPED: u32 = 1 << 9;
+pub const FLAG_CASTELLATED: u32 = 1 << 10;
 
 /// Plating assumed when a hole carries none (IPC class 2's minimum average).
 pub const DEFAULT_PLATING_NM: f64 = 25_000.0;
@@ -71,6 +84,33 @@ fn stadium(hole: &HoleOperation) -> Option<((f64, f64), f64, f64, f64)> {
     }
 }
 
+/// The protection and castellation flags of `hole`.
+fn treatment(hole: &HoleOperation) -> u32 {
+    let yes = |state: &ProtectionState, flag: u32| {
+        if *state == ProtectionState::Yes {
+            flag
+        } else {
+            0
+        }
+    };
+    let protection = hole.protection.as_ref().map_or(0, |p| {
+        yes(&p.front.tented, FLAG_TENTED_FRONT)
+            | yes(&p.back.tented, FLAG_TENTED_BACK)
+            | yes(&p.front.covered, FLAG_COVERED_FRONT)
+            | yes(&p.back.covered, FLAG_COVERED_BACK)
+            | yes(&p.front.plugged, FLAG_PLUGGED_FRONT)
+            | yes(&p.back.plugged, FLAG_PLUGGED_BACK)
+            | yes(&p.filled, FLAG_FILLED)
+            | yes(&p.capped, FLAG_CAPPED)
+    });
+    protection
+        | if hole.castellated == Some(true) {
+            FLAG_CASTELLATED
+        } else {
+            0
+        }
+}
+
 /// Every hole's barrel (unplated ones flagged); `orders` gives each slice
 /// key's order.
 pub fn barrels(holes: &[HoleOperation], orders: &impl Fn(&str) -> Option<u32>) -> Barrels {
@@ -117,7 +157,8 @@ pub fn barrels(holes: &[HoleOperation], orders: &impl Fn(&str) -> Option<u32>) -
             until(BoardSide::Front),
             until(BoardSide::Back),
             u32::from(plating.is_none()) * FLAG_DEFAULT_PLATING
-                + u32::from(!plated) * FLAG_UNPLATED,
+                + u32::from(!plated) * FLAG_UNPLATED
+                + treatment(hole),
             0,
             0,
         ]);
@@ -197,5 +238,26 @@ mod tests {
         // An unplated hole is a wall only: no plating, flagged.
         assert_eq!(out.floats[BARREL_FLOATS + 5], 0.0);
         assert_eq!(out.words[BARREL_WORDS + 5], FLAG_UNPLATED);
+    }
+
+    #[test]
+    fn protection_and_castellation_are_flagged() {
+        let protection = r#","protection":{"front":{"tented":"yes","covered":"no","plugged":"yes"},
+            "back":{"tented":"no","covered":"yes","plugged":"unspecified"},"filled":"yes","capped":"no"},
+            "castellated":true"#;
+        let via = hole(&base(
+            r#"{"kind":"disk_2d","center_nm":[0,0],"radius_nm":100000}"#,
+            protection,
+        ));
+        let out = barrels(&[via], &orders);
+        assert_eq!(
+            out.words[5],
+            FLAG_DEFAULT_PLATING
+                | FLAG_TENTED_FRONT
+                | FLAG_PLUGGED_FRONT
+                | FLAG_COVERED_BACK
+                | FLAG_FILLED
+                | FLAG_CASTELLATED
+        );
     }
 }

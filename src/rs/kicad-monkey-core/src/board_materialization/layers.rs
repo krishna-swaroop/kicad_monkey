@@ -10,7 +10,8 @@ use super::geometry::nm;
 use super::stack::{CopperStack, slice_key};
 use crate::pcb::{PcbStackup, PcbStackupLayer};
 use kicad_monkey_contracts::generated::materialization_document::{
-    BoardSide, NonNegativeNm, SliceRole, Stack, StackRegion, StackRegionKind, StackSlice,
+    BoardSide, DielectricKind, NonNegativeNm, SliceRole, Stack, StackRegion, StackRegionKind,
+    StackSlice,
 };
 
 /// Stack plus the reason it is incomplete, when it is.
@@ -68,6 +69,16 @@ fn technical_key(role: SliceRole, side: Option<BoardSide>, name: &str) -> String
     }
 }
 
+/// A dielectric's construction from its stackup `type` (KiCad writes
+/// "core" or "prepreg").
+fn dielectric_kind(type_name: &str) -> Option<DielectricKind> {
+    match type_name.trim().to_ascii_lowercase().as_str() {
+        "core" => Some(DielectricKind::Core),
+        "prepreg" => Some(DielectricKind::Prepreg),
+        _ => None,
+    }
+}
+
 fn known(text: &str) -> Option<String> {
     let trimmed = text.trim();
     (!trimmed.is_empty() && !trimmed.eq_ignore_ascii_case("not specified"))
@@ -90,6 +101,9 @@ fn slices_from(layer: &PcbStackupLayer) -> Vec<StackSlice> {
         material_name: known(material),
         relative_permittivity: er,
         loss_tangent: tan,
+        dielectric_kind: (role == SliceRole::Dielectric)
+            .then(|| dielectric_kind(&layer.type_name))
+            .flatten(),
     };
     let mut slices = vec![slice(
         key.clone(),
@@ -121,6 +135,7 @@ fn technical(role: SliceRole, side: BoardSide, name: &str) -> StackSlice {
         material_name: None,
         relative_permittivity: None,
         loss_tangent: None,
+        dielectric_kind: None,
     }
 }
 

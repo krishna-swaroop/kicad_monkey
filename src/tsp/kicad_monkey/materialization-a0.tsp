@@ -226,6 +226,15 @@ enum BoardSide {
 }
 
 /**
+ * How a dielectric slice is built: a cured `core` laminate or a `prepreg`
+ * bonding ply (KiCad's stackup layer `type`).
+ */
+enum DielectricKind {
+  core,
+  prepreg,
+}
+
+/**
  * One physical slice of the rigid board stack. `order` is zero at the front
  * outermost slice and increases toward the back. Z positions are derived
  * from the ordered thicknesses and are never stored. Absent values are
@@ -241,6 +250,8 @@ model StackSlice {
   material_name?: string;
   relative_permittivity?: float64;
   loss_tangent?: float64;
+  /** A dielectric's construction, when the stackup states it. */
+  dielectric_kind?: DielectricKind;
 }
 
 enum StackRegionKind {

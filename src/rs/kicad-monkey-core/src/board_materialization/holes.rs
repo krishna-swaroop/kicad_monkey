@@ -4,6 +4,7 @@
 //! dielectric product (which subtracts them) see the same holes. Plating
 //! thickness is not stated by KiCad and stays unknown.
 
+use super::apertures::BoardMargins;
 use super::emit::{Emitter, HoleFacts, Origin, source_uid};
 use super::geometry::{nm, origin, rotation_translation};
 use super::nets::net_key;
@@ -11,7 +12,7 @@ use super::pads::{PadFrame, oval};
 use super::stack::CopperStack;
 use crate::pcb::{
     PcbDrillProperties, PcbFrontBackOptionalBool, PcbHoleShape, PcbPad, PcbPostMachiningProperties,
-    PcbVia,
+    PcbSetup, PcbVia,
 };
 use kicad_monkey_contracts::generated::materialization_document::{
     Affine2D, Backdrill, BindingSourceKind, BoardSide, Disk2d, HolePlating, HoleProtection,
@@ -34,26 +35,71 @@ fn round_hole(diameter: f64) -> Shape2d {
     })
 }
 
-fn state(value: Option<bool>) -> ProtectionState {
-    match value {
-        Some(true) => ProtectionState::Yes,
-        Some(false) => ProtectionState::No,
-        None => ProtectionState::Unspecified,
+/// Last board format in which a via's absent covering, plugging, filling
+/// and capping meant "off" rather than "as the board" (KiCad's parser).
+const PROTECTION_OFF_BEFORE: i64 = 20_250_228;
+
+/// The board's via protection, which a via's unstated sides follow
+/// (`PCB_VIA`'s `FROM_BOARD` modes, from `(setup (tenting ...) (covering
+/// ...) (plugging ...) (capping ...) (filling ...))`); tenting follows
+/// KiCad's fallbacks (see [`BoardMargins::from_setup`]). Boards older than
+/// format 20250228 did not write the other four, so they are off there.
+pub(crate) struct ViaDefaults {
+    tented: (bool, bool),
+    covered: (bool, bool),
+    plugged: (bool, bool),
+    filled: bool,
+    capped: bool,
+}
+
+impl ViaDefaults {
+    pub(crate) fn from_setup(setup: Option<&PcbSetup>, version: i64) -> Self {
+        let margins = BoardMargins::from_setup(setup, version);
+        let tented = (margins.tent_front, margins.tent_back);
+        let setup = setup.filter(|_| version >= PROTECTION_OFF_BEFORE);
+        setup.map_or(
+            Self {
+                tented,
+                covered: (false, false),
+                plugged: (false, false),
+                filled: false,
+                capped: false,
+            },
+            |setup| Self {
+                tented,
+                covered: (setup.covering_front, setup.covering_back),
+                plugged: (setup.plugging_front, setup.plugging_back),
+                filled: setup.filling,
+                capped: setup.capping,
+            },
+        )
     }
 }
 
-fn sides(value: Option<&PcbFrontBackOptionalBool>) -> (ProtectionState, ProtectionState) {
+fn resolved(authored: Option<bool>, board: bool) -> ProtectionState {
+    if authored.unwrap_or(board) {
+        ProtectionState::Yes
+    } else {
+        ProtectionState::No
+    }
+}
+
+fn sides(
+    value: Option<&PcbFrontBackOptionalBool>,
+    board: (bool, bool),
+) -> (ProtectionState, ProtectionState) {
     (
-        state(value.and_then(|value| value.front)),
-        state(value.and_then(|value| value.back)),
+        resolved(value.and_then(|value| value.front), board.0),
+        resolved(value.and_then(|value| value.back), board.1),
     )
 }
 
-/// Via protection exactly as authored; `unspecified` defers to the board.
-fn via_protection(via: &PcbVia) -> HoleProtection {
-    let (tented_front, tented_back) = sides(via.tenting.as_ref());
-    let (covered_front, covered_back) = sides(via.covering.as_ref());
-    let (plugged_front, plugged_back) = sides(via.plugging.as_ref());
+/// Via protection as fabricated: each side as the via states it, else as
+/// the board does (KiCad's `FROM_BOARD` modes).
+fn via_protection(via: &PcbVia, board: &ViaDefaults) -> HoleProtection {
+    let (tented_front, tented_back) = sides(via.tenting.as_ref(), board.tented);
+    let (covered_front, covered_back) = sides(via.covering.as_ref(), board.covered);
+    let (plugged_front, plugged_back) = sides(via.plugging.as_ref(), board.plugged);
     HoleProtection {
         front: SideProtection {
             tented: tented_front,
@@ -65,8 +111,8 @@ fn via_protection(via: &PcbVia) -> HoleProtection {
             covered: covered_back,
             plugged: plugged_back,
         },
-        filled: state(via.filling),
-        capped: state(via.capping),
+        filled: resolved(via.filling, board.filled),
+        capped: resolved(via.capping, board.capped),
     }
 }
 
@@ -144,6 +190,7 @@ fn post_machining(
 
 pub(crate) fn via_holes(
     vias: &[PcbVia],
+    board: &ViaDefaults,
     stack: &CopperStack,
     holes: &mut Vec<HoleSpec>,
     emitter: &mut Emitter,
@@ -159,7 +206,7 @@ pub(crate) fn via_holes(
         let Some(mut facts) = facts(HolePlating::Plated, &stack.expand(&via.layers), stack) else {
             continue;
         };
-        facts.protection = Some(via_protection(via));
+        facts.protection = Some(via_protection(via, board));
         facts.backdrills = backdrills([via.backdrill.as_ref(), via.tertiary_drill.as_ref()], stack);
         facts.post_machining = post_machining(
             via.front_post_machining.as_ref(),

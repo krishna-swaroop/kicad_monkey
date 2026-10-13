@@ -940,6 +940,80 @@ impl ::std::convert::TryFrom<::std::string::String> for DiagnosticSeverity {
         value.parse()
     }
 }
+/**How a dielectric slice is built: a cured `core` laminate or a `prepreg`
+bonding ply (KiCad's stackup layer `type`).*/
+///
+/// <details><summary>JSON schema</summary>
+///
+/// ```json
+///{
+///  "description": "How a dielectric slice is built: a cured `core` laminate or a `prepreg`\nbonding ply (KiCad's stackup layer `type`).",
+///  "type": "string",
+///  "enum": [
+///    "core",
+///    "prepreg"
+///  ]
+///}
+/// ```
+/// </details>
+#[derive(
+    ::serde::Deserialize,
+    ::serde::Serialize,
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd,
+)]
+pub enum DielectricKind {
+    #[serde(rename = "core")]
+    Core,
+    #[serde(rename = "prepreg")]
+    Prepreg,
+}
+impl ::std::fmt::Display for DielectricKind {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        match *self {
+            Self::Core => f.write_str("core"),
+            Self::Prepreg => f.write_str("prepreg"),
+        }
+    }
+}
+impl ::std::str::FromStr for DielectricKind {
+    type Err = self::error::ConversionError;
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+        match value {
+            "core" => Ok(Self::Core),
+            "prepreg" => Ok(Self::Prepreg),
+            _ => Err("invalid value".into()),
+        }
+    }
+}
+impl ::std::convert::TryFrom<&str> for DielectricKind {
+    type Error = self::error::ConversionError;
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+impl ::std::convert::TryFrom<&::std::string::String> for DielectricKind {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: &::std::string::String,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+impl ::std::convert::TryFrom<::std::string::String> for DielectricKind {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: ::std::string::String,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
 /**Two nets paired by KiCad's suffix rule: after any trailing digits and
 underscores, `+` or `P` marks the positive net and `-` or `N` the
 negative one, and both nets exist.*/
@@ -3292,6 +3366,10 @@ unknown, never defaulted.*/
 ///    "role"
 ///  ],
 ///  "properties": {
+///    "dielectric_kind": {
+///      "description": "A dielectric's construction, when the stackup states it.",
+///      "$ref": "#/$defs/DielectricKind"
+///    },
 ///    "key": {
 ///      "type": "string"
 ///    },
@@ -3329,6 +3407,13 @@ unknown, never defaulted.*/
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
 #[serde(deny_unknown_fields)]
 pub struct StackSlice {
+    ///A dielectric's construction, when the stackup states it.
+    #[serde(
+        default,
+        deserialize_with = "crate::deserialize_present_nonnull",
+        skip_serializing_if = "::std::option::Option::is_none"
+    )]
+    pub dielectric_kind: ::std::option::Option<DielectricKind>,
     pub key: ::std::string::String,
     #[serde(
         default,
