@@ -16,15 +16,18 @@ crate-type = ["cdylib", "rlib"]
 workspace = true
 
 [features]
-default = ["sexpr", "footprint", "symbol", "board"]
+default = ["sexpr", "footprint", "symbol", "board", "materialization", "materialize"]
 sexpr = []
 footprint = []
 symbol = []
 board = []
+materialization = ["dep:kicad-monkey-materialization-pack"]
+materialize = ["materialization"]
 
 [dependencies]
 kicad-monkey-contracts = { path = "../kicad-monkey-contracts" }
 kicad-monkey-core = { path = "../kicad-monkey-core", default-features = false }
+kicad-monkey-materialization-pack = { path = "../kicad-monkey-materialization-pack", optional = true }
 serde.workspace = true
 serde_json.workspace = true
 wasm-bindgen.workspace = true

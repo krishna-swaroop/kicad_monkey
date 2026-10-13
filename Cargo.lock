@@ -641,6 +641,7 @@ version = "2026.9.7"
 dependencies = [
  "kicad-monkey-contracts",
  "kicad-monkey-core",
+ "kicad-monkey-materialization-pack",
  "serde",
  "serde_json",
  "wasm-bindgen",

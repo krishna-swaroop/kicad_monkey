@@ -4,6 +4,8 @@
 
 #[cfg(feature = "board")]
 mod board_plot;
+#[cfg(feature = "materialization")]
+pub mod materialization;
 #[cfg(any(feature = "footprint", feature = "symbol", feature = "board"))]
 #[cfg(feature = "symbol")]
 mod symbol_library;
@@ -51,6 +53,12 @@ use kicad_monkey_contracts::generated::scan_result::{
 };
 #[cfg(feature = "sexpr")]
 use kicad_monkey_contracts::{ValidatedNode, validate_build_request};
+#[cfg(any(
+    feature = "sexpr",
+    feature = "footprint",
+    feature = "symbol",
+    feature = "board"
+))]
 use kicad_monkey_core::ErrorKind;
 #[cfg(any(feature = "sexpr", feature = "footprint"))]
 use kicad_monkey_core::{Error, ErrorPhase};
@@ -649,6 +657,12 @@ fn footprint_plot_limit_diagnostic() -> FootprintPlotDiagnostic {
     }
 }
 
+#[cfg(any(
+    feature = "sexpr",
+    feature = "footprint",
+    feature = "symbol",
+    feature = "board"
+))]
 fn error_code(kind: ErrorKind) -> &'static str {
     match kind {
         ErrorKind::InvalidUtf8 => "invalid_utf8",
