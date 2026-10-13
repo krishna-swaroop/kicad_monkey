@@ -87,6 +87,21 @@ fn assert_tiled_batches(front: &LoweredSlice) {
     }
 }
 
+/// The via's and the pad's lands each list the hole through them, and every
+/// listed cut is a subtract record.
+fn assert_hole_cuts(front: &LoweredSlice, subtracts: usize, edges: usize) {
+    let adds = records(&front.shapes).len() - subtracts;
+    assert_eq!(front.shape_cuts.len(), adds * 2);
+    assert_eq!(front.edge_cuts.len(), edges * 2);
+    let ranges = front.shape_cuts.as_chunks::<2>().0;
+    let lands = ranges.iter().filter(|range| range[1] > 0).count();
+    assert!(lands >= 2, "{lands} shapes reach a hole");
+    for range in ranges {
+        let listed = &front.cut_indices[range[0] as usize..(range[0] + range[1]) as usize];
+        assert!(listed.iter().all(|&hole| (hole as usize) < subtracts));
+    }
+}
+
 #[test]
 fn copper_lowers_to_analytic_records_with_holes_as_subtracts() {
     let pack = pack();
@@ -148,6 +163,7 @@ fn copper_lowers_to_analytic_records_with_holes_as_subtracts() {
     starts.sort_unstable();
     ends.sort_unstable();
     assert_eq!(starts, ends);
+    assert_hole_cuts(&front, subtracts, edges.len());
     // The back holds only the two through holes.
     let back = pack.lower("copper.back", 1_000.0).expect("lowers");
     assert_eq!(back.subtract_shapes, 2);

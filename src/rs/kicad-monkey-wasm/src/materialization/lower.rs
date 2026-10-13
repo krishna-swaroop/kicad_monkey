@@ -13,6 +13,7 @@
 //! Lengths are board millimetres (`f32`) in KiCad's frame, X right and Y
 //! down. A hole whose span crosses the slice is lowered as a subtract.
 
+use super::cuts::{cuts, record_bounds};
 use super::tiles::{TILE_MM, tile_region};
 use kicad_monkey_contracts::generated::materialization_document::{
     Affine2D, Contour, HoleOperation, MaterialAction, MaterialOperation, NmBounds, NmPoint,
@@ -83,6 +84,12 @@ pub struct LoweredSlice {
     /// Per contour edge, its region's operation index, with
     /// `EDGE_SUBTRACT` set for a subtracting region.
     pub contour_edge_operations: Vec<u32>,
+    /// Per add shape, then per contour edge, a (first, count) range into
+    /// `cut_indices`: the holes (subtract shape records) whose bounds reach it,
+    /// where a slab's side walls are cut (see `cuts`).
+    pub shape_cuts: Vec<u32>,
+    pub edge_cuts: Vec<u32>,
+    pub cut_indices: Vec<u32>,
     pub stats: LowerStats,
 }
 
@@ -568,6 +575,27 @@ impl Builder {
                 }
             }
         }
+        let (subtracts, adds) = out
+            .shapes
+            .split_at(out.subtract_shapes as usize * SHAPE_WORDS);
+        let shapes = adds
+            .as_chunks::<SHAPE_WORDS>()
+            .0
+            .iter()
+            .map(|record| record_bounds(record));
+        let edges = out.contour_edges.as_chunks::<4>().0.iter().map(|e| {
+            [
+                e[0].min(e[2]),
+                e[1].min(e[3]),
+                e[0].max(e[2]),
+                e[1].max(e[3]),
+            ]
+        });
+        let shape_count = adds.len() / SHAPE_WORDS;
+        let found = cuts(subtracts, shapes.chain(edges));
+        out.shape_cuts = found.ranges[..shape_count * 2].to_vec();
+        out.edge_cuts = found.ranges[shape_count * 2..].to_vec();
+        out.cut_indices = found.indices;
         for (subtract, members) in batch_regions(&self.regions) {
             let first_vertex = out.fan_vertices.len() / 2;
             let first_cover = out.covers.len() / COVER_WORDS;

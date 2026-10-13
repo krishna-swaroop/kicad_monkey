@@ -2,6 +2,7 @@
 //! sources, open a pack, and lower its slices for an analytic renderer.
 
 pub mod barrels;
+pub mod cuts;
 pub mod lower;
 pub mod tiles;
 
@@ -246,6 +247,24 @@ impl LoweredSliceRecords {
     #[wasm_bindgen(js_name = contourEdgeOperations)]
     pub fn contour_edge_operations(&self) -> Vec<u32> {
         self.inner.contour_edge_operations.clone()
+    }
+
+    /// Per add shape, a (first, count) range into `cutIndices`.
+    #[wasm_bindgen(js_name = shapeCuts)]
+    pub fn shape_cuts(&self) -> Vec<u32> {
+        self.inner.shape_cuts.clone()
+    }
+
+    /// Per contour edge, a (first, count) range into `cutIndices`.
+    #[wasm_bindgen(js_name = edgeCuts)]
+    pub fn edge_cuts(&self) -> Vec<u32> {
+        self.inner.edge_cuts.clone()
+    }
+
+    /// The hole shape records the ranges name.
+    #[wasm_bindgen(js_name = cutIndices)]
+    pub fn cut_indices(&self) -> Vec<u32> {
+        self.inner.cut_indices.clone()
     }
 
     /// Counts of material drawn approximately, as JSON.
