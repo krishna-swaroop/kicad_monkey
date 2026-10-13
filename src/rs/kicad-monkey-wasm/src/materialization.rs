@@ -241,6 +241,13 @@ impl LoweredSliceRecords {
         self.inner.contour_edges.clone()
     }
 
+    /// Per contour edge, its region's operation index (`lower::EDGE_SUBTRACT`
+    /// set for a subtracting region).
+    #[wasm_bindgen(js_name = contourEdgeOperations)]
+    pub fn contour_edge_operations(&self) -> Vec<u32> {
+        self.inner.contour_edge_operations.clone()
+    }
+
     /// Counts of material drawn approximately, as JSON.
     #[wasm_bindgen(js_name = statsJson)]
     pub fn stats_json(&self) -> String {

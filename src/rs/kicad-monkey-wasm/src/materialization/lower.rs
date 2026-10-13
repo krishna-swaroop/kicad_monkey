@@ -38,6 +38,9 @@ pub mod kind {
     pub const ARC: u32 = 6;
 }
 
+/// Contour edge flag: the edge bounds a subtracting region.
+pub const EDGE_SUBTRACT: u32 = 1 << 31;
+
 /// Record flag: the operation removes material.
 pub const FLAG_SUBTRACT: u32 = 1;
 /// Record flags of chamfered corners, from bit 8: top left, top right,
@@ -77,6 +80,9 @@ pub struct LoweredSlice {
     /// Every region contour's edges, closed, as (x0, y0, x1, y1) board
     /// millimetres: where an extruded slice has side walls.
     pub contour_edges: Vec<f32>,
+    /// Per contour edge, its region's operation index, with
+    /// `EDGE_SUBTRACT` set for a subtracting region.
+    pub contour_edge_operations: Vec<u32>,
     pub stats: LowerStats,
 }
 
@@ -552,10 +558,14 @@ impl Builder {
         };
         out.shapes = self.subtracts;
         out.shapes.extend(self.adds);
-        for contour in self.regions.iter().flat_map(|region| &region.contours) {
-            for (position, &(x0, y0)) in contour.iter().enumerate() {
-                let (x1, y1) = contour[(position + 1) % contour.len()];
-                out.contour_edges.extend([x0, y0, x1, y1]);
+        for region in &self.regions {
+            let operation = region.index | (u32::from(region.subtract) * EDGE_SUBTRACT);
+            for contour in &region.contours {
+                for (position, &(x0, y0)) in contour.iter().enumerate() {
+                    let (x1, y1) = contour[(position + 1) % contour.len()];
+                    out.contour_edges.extend([x0, y0, x1, y1]);
+                    out.contour_edge_operations.push(operation);
+                }
             }
         }
         for (subtract, members) in batch_regions(&self.regions) {

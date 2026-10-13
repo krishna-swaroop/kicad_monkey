@@ -1,6 +1,6 @@
 use super::{
-    BATCH_WORDS, COVER_WORDS, FLAG_CHAMFER_SHIFT, FLAG_SUBTRACT, LoweredSlice, SHAPE_WORDS,
-    arc_through, flatten_cubic, hole_crosses, kind,
+    BATCH_WORDS, COVER_WORDS, EDGE_SUBTRACT, FLAG_CHAMFER_SHIFT, FLAG_SUBTRACT, LoweredSlice,
+    SHAPE_WORDS, arc_through, flatten_cubic, hole_crosses, kind,
 };
 use crate::materialization::AnalyticPack;
 use kicad_monkey_core::board_materialization::materialize_board;
@@ -131,6 +131,17 @@ fn copper_lowers_to_analytic_records_with_holes_as_subtracts() {
     assert_tiled_batches(&front);
     // Each contour closes: the edges' starts are their ends.
     let edges = front.contour_edges.as_chunks::<4>().0;
+    // Each edge names its region's operation: the zone's two fills, adding.
+    assert_eq!(front.contour_edge_operations.len(), edges.len());
+    assert!(
+        front
+            .contour_edge_operations
+            .iter()
+            .all(|&op| op & EDGE_SUBTRACT == 0)
+    );
+    let mut fills = front.contour_edge_operations.clone();
+    fills.dedup();
+    assert_eq!(fills.len(), 2);
     let key = |x: f32, y: f32| (x.to_bits(), y.to_bits());
     let mut starts: Vec<_> = edges.iter().map(|e| key(e[0], e[1])).collect();
     let mut ends: Vec<_> = edges.iter().map(|e| key(e[2], e[3])).collect();
