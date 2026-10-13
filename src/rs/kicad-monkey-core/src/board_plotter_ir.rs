@@ -34,7 +34,7 @@ use std::time::Instant;
 
 use copper::{segment_record, track_arc_record, via_operation_count, via_record, zone_record};
 use graphics::graphic_records;
-use layer_policy::BoardLayerFlashResolver;
+pub(crate) use layer_policy::{BoardLayerFlashResolver, FlashInputs};
 use limits::board_pcb_limits;
 pub use stroke_text_bounds::BoardBoundsLimits;
 pub use text::{

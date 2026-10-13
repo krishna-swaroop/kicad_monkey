@@ -9,6 +9,7 @@
 /// Version of the Rust KiCad Monkey engine producing reusable core artifacts.
 pub const ENGINE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
+pub mod board_materialization;
 pub mod board_plot_contract;
 pub mod board_plotter_ir;
 pub mod compiled_schematic_graph;
