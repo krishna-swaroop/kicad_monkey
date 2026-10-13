@@ -71,6 +71,9 @@ pub struct LoweredSlice {
     pub fan_vertices: Vec<f32>,
     pub covers: Vec<u32>,
     pub batches: Vec<u32>,
+    /// Every region contour's edges, closed, as (x0, y0, x1, y1) board
+    /// millimetres: where an extruded slice has side walls.
+    pub contour_edges: Vec<f32>,
     pub stats: LowerStats,
 }
 
@@ -546,6 +549,12 @@ impl Builder {
         };
         out.shapes = self.subtracts;
         out.shapes.extend(self.adds);
+        for contour in self.regions.iter().flat_map(|region| &region.contours) {
+            for (position, &(x0, y0)) in contour.iter().enumerate() {
+                let (x1, y1) = contour[(position + 1) % contour.len()];
+                out.contour_edges.extend([x0, y0, x1, y1]);
+            }
+        }
         for (subtract, members) in batch_regions(&self.regions) {
             let first_vertex = out.fan_vertices.len() / 2;
             let first_cover = out.covers.len() / COVER_WORDS;

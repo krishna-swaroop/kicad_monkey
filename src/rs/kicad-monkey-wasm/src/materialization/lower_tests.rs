@@ -110,6 +110,16 @@ fn copper_lowers_to_analytic_records_with_holes_as_subtracts() {
     assert_eq!(front.batches.len(), 2 * BATCH_WORDS);
     assert_eq!(front.covers.len(), 2 * COVER_WORDS);
     assert_eq!(front.fan_vertices.len() % 6, 0);
+    // Each contour closes: one edge per fan triangle plus the two at its
+    // anchor (two contours here), and the edges' starts are their ends.
+    let edges = front.contour_edges.as_chunks::<4>().0;
+    assert_eq!(edges.len(), front.fan_vertices.len() / 6 + 2 * 2);
+    let key = |x: f32, y: f32| (x.to_bits(), y.to_bits());
+    let mut starts: Vec<_> = edges.iter().map(|e| key(e[0], e[1])).collect();
+    let mut ends: Vec<_> = edges.iter().map(|e| key(e[2], e[3])).collect();
+    starts.sort_unstable();
+    ends.sort_unstable();
+    assert_eq!(starts, ends);
     // The back holds only the two through holes.
     let back = pack.lower("copper.back", 1_000.0).expect("lowers");
     assert_eq!(back.subtract_shapes, 2);

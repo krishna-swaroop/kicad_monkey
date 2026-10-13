@@ -1,6 +1,7 @@
-//! Plated barrels of a pack's holes, for an analytic renderer: each hole as a
-//! stadium (a round drill is one of length 0) with its plating, copper span,
-//! and backdrills, in board millimetres (KiCad frame, y down).
+//! The drilled holes of a pack, for an analytic renderer: each as a stadium
+//! (a round drill is one of length 0) with its plating (none for an unplated
+//! hole, which is then only a wall), copper span, and backdrills, in board
+//! millimetres (KiCad frame, y down).
 
 use kicad_monkey_contracts::generated::materialization_document::{
     Affine2D, BoardSide, HoleOperation, HolePlating, NmPoint, Shape2d,
@@ -16,12 +17,14 @@ pub const BARREL_WORDS: usize = 8;
 pub const NONE: u32 = u32::MAX;
 /// Flag: the plating thickness is the default, not the pack's.
 pub const FLAG_DEFAULT_PLATING: u32 = 1;
+/// Flag: an unplated hole (its plating is 0).
+pub const FLAG_UNPLATED: u32 = 2;
 
 /// Plating assumed when a hole carries none (IPC class 2's minimum average).
 pub const DEFAULT_PLATING_NM: f64 = 25_000.0;
 
-/// The barrels, `BARREL_FLOATS` floats and `BARREL_WORDS` words each, in the
-/// holes' order; and how many plated holes had a shape a barrel cannot take.
+/// The holes, `BARREL_FLOATS` floats and `BARREL_WORDS` words each, in the
+/// holes' order; and how many had a shape a barrel cannot take.
 #[derive(Debug, Default)]
 pub struct Barrels {
     pub floats: Vec<f32>,
@@ -68,13 +71,12 @@ fn stadium(hole: &HoleOperation) -> Option<((f64, f64), f64, f64, f64)> {
     }
 }
 
-/// The plated holes' barrels; `orders` gives each slice key's order.
+/// Every hole's barrel (unplated ones flagged); `orders` gives each slice
+/// key's order.
 pub fn barrels(holes: &[HoleOperation], orders: &impl Fn(&str) -> Option<u32>) -> Barrels {
     let mut out = Barrels::default();
-    for hole in holes
-        .iter()
-        .filter(|hole| hole.plating == HolePlating::Plated)
-    {
+    for hole in holes {
+        let plated = hole.plating == HolePlating::Plated;
         let (Some(start), Some(end)) = (orders(&hole.start_slice_key), orders(&hole.end_slice_key))
         else {
             out.skipped += 1;
@@ -84,7 +86,11 @@ pub fn barrels(holes: &[HoleOperation], orders: &impl Fn(&str) -> Option<u32>) -
             out.skipped += 1;
             continue;
         };
-        let plating = hole.plating_thickness_nm.as_ref().map(|nm| **nm as f64);
+        let plating = if plated {
+            hole.plating_thickness_nm.as_ref().map(|nm| **nm as f64)
+        } else {
+            Some(0.0)
+        };
         let until = |side: BoardSide| {
             hole.backdrills
                 .iter()
@@ -110,11 +116,8 @@ pub fn barrels(holes: &[HoleOperation], orders: &impl Fn(&str) -> Option<u32>) -
             end,
             until(BoardSide::Front),
             until(BoardSide::Back),
-            if plating.is_none() {
-                FLAG_DEFAULT_PLATING
-            } else {
-                0
-            },
+            u32::from(plating.is_none()) * FLAG_DEFAULT_PLATING
+                + u32::from(!plated) * FLAG_UNPLATED,
             0,
             0,
         ]);
@@ -187,9 +190,12 @@ mod tests {
             .replace(r#""plating":"plated""#, r#""plating":"unplated""#),
         );
         let out = barrels(&[via, unplated], &orders);
-        assert_eq!(out.floats.len(), BARREL_FLOATS);
+        assert_eq!(out.floats.len(), 2 * BARREL_FLOATS);
         assert_eq!(out.floats[2], 0.0);
         assert!((out.floats[5] - 0.025).abs() < 1e-6);
         assert_eq!(&out.words[..6], &[7, 0, 4, NONE, 2, FLAG_DEFAULT_PLATING]);
+        // An unplated hole is a wall only: no plating, flagged.
+        assert_eq!(out.floats[BARREL_FLOATS + 5], 0.0);
+        assert_eq!(out.words[BARREL_WORDS + 5], FLAG_UNPLATED);
     }
 }

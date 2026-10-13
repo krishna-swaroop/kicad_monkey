@@ -224,6 +224,12 @@ impl LoweredSliceRecords {
         self.inner.batches.clone()
     }
 
+    /// Region contour edges, (x0, y0, x1, y1) board millimetres each.
+    #[wasm_bindgen(js_name = contourEdges)]
+    pub fn contour_edges(&self) -> Vec<f32> {
+        self.inner.contour_edges.clone()
+    }
+
     /// Counts of material drawn approximately, as JSON.
     #[wasm_bindgen(js_name = statsJson)]
     pub fn stats_json(&self) -> String {
