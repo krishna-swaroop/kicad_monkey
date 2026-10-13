@@ -1,6 +1,7 @@
 //! Browser access to analytic materializations: produce a pack from KiCad
 //! sources, open a pack, and lower its slices for an analytic renderer.
 
+pub mod barrels;
 pub mod lower;
 
 use kicad_monkey_contracts::generated::materialization_document::{
@@ -99,6 +100,12 @@ impl AnalyticPack {
         ))
     }
 
+    /// The barrels of the plated holes (see [`barrels::barrels`]).
+    pub fn barrels(&self) -> barrels::Barrels {
+        let orders = |slice: &str| self.orders.get(slice).copied();
+        barrels::barrels(&self.holes, &orders)
+    }
+
     /// The binding entry of operation `index`, if it has one.
     pub fn binding(&self, index: u32) -> Option<&BindingEntry> {
         let binding = &self.header.binding;
@@ -146,6 +153,40 @@ impl AnalyticPack {
         self.lower(key, tolerance_nm)
             .map(|inner| LoweredSliceRecords { inner })
             .map_err(|error| JsValue::from_str(&error))
+    }
+}
+
+#[wasm_bindgen]
+impl AnalyticPack {
+    /// The plated holes' barrels, read by JavaScript as typed arrays.
+    #[wasm_bindgen(js_name = barrelRecords)]
+    pub fn barrel_records(&self) -> BarrelRecords {
+        BarrelRecords {
+            inner: self.barrels(),
+        }
+    }
+}
+
+/// The barrels of a pack: `barrels::BARREL_FLOATS` floats and
+/// `barrels::BARREL_WORDS` words each.
+#[wasm_bindgen]
+pub struct BarrelRecords {
+    inner: barrels::Barrels,
+}
+
+#[wasm_bindgen]
+impl BarrelRecords {
+    pub fn floats(&self) -> Vec<f32> {
+        self.inner.floats.clone()
+    }
+
+    pub fn words(&self) -> Vec<u32> {
+        self.inner.words.clone()
+    }
+
+    /// Plated holes whose shape a barrel cannot take.
+    pub fn skipped(&self) -> u32 {
+        self.inner.skipped
     }
 }
 
